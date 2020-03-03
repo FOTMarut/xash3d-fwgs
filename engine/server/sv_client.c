@@ -137,7 +137,6 @@ SV_RejectConnection
 Rejects connection request and sends back a message
 ================
 */
-void SV_RejectConnection( netadr_t from, char *fmt, ... ) _format( 2 );
 void SV_RejectConnection( netadr_t from, char *fmt, ... )
 {
 	char	text[1024];
@@ -148,6 +147,7 @@ void SV_RejectConnection( netadr_t from, char *fmt, ... )
 	va_end( argptr );
 
 	Con_Reportf( "%s connection refused. Reason: %s\n", NET_AdrToString( from ), text );
+	Netchan_OutOfBandPrint( NS_SERVER, from, "errormsg\n^1Server was reject the connection:^7 %s", text );
 	Netchan_OutOfBandPrint( NS_SERVER, from, "print\n^1Server was reject the connection:^7 %s", text );
 	Netchan_OutOfBandPrint( NS_SERVER, from, "disconnect\n" );
 }
@@ -303,6 +303,11 @@ void SV_ConnectClient( netadr_t from )
 
 	Q_strncpy( protinfo, s, sizeof( protinfo ));
 
+	if( !SV_ProcessUserAgent( from, protinfo ) )
+	{
+		return;
+	}
+
 	// extract qport from protocol info
 	qport = Q_atoi( Info_ValueForKey( protinfo, "qport" ));
 
@@ -314,7 +319,6 @@ void SV_ConnectClient( netadr_t from )
 	}
 
 	extensions = Q_atoi( Info_ValueForKey( protinfo, "ext" ) );
-
 
 	// LAN servers restrict to class b IP addresses
 	if( !SV_CheckIPRestrictions( from ))
@@ -372,6 +376,18 @@ void SV_ConnectClient( netadr_t from )
 
 	// build a new connection
 	// accept the new client
+	if( Q_strncpy( newcl->useragent, Cmd_Argv( 6 ), MAX_INFO_STRING ) )
+	{
+		const char *id = Info_ValueForKey( newcl->useragent, "i" );
+
+		if( *id )
+		{
+			//sscanf( id, "%llx", &newcl->WonID );
+		}
+
+		// Q_strncpy( cl->auth_id, id, sizeof( cl->auth_id ) );
+	}
+
 	sv.current_client = newcl;
 	newcl->edict = EDICT_NUM( (newcl - svs.clients) + 1 );
 	newcl->challenge = challenge; // save challenge for checksumming
@@ -529,12 +545,20 @@ void SV_DropClient( sv_client_t *cl, qboolean crash )
 	if( !crash )
 	{
 		// add the disconnect
-		if( !FBitSet( cl->flags, FCL_FAKECLIENT ))
+		if( !FBitSet( cl->flags, FCL_FAKECLIENT ) )
+		{
 			MSG_BeginServerCmd( &cl->netchan.message, svc_disconnect );
+		}
 
 		if( cl->edict && cl->state == cs_spawned )
+		{
 			svgame.dllFuncs.pfnClientDisconnect( cl->edict );
-		Netchan_TransmitBits( &cl->netchan, 0, NULL );
+		}
+
+		if( !FBitSet( cl->flags, FCL_FAKECLIENT ) )
+		{
+			Netchan_TransmitBits( &cl->netchan, 0, NULL );
+		}
 	}
 
 	ClearBits( cl->flags, FCL_FAKECLIENT );
@@ -656,10 +680,48 @@ const char *SV_GetClientIDString( sv_client_t *cl )
 	}
 	else
 	{
-		Q_snprintf( result, sizeof( result ), "ID_%s", MD5_Print( cl->hashedcdkey ));
+		Q_snprintf( result, sizeof( result ), "ID_%s", MD5_Print( (byte *)cl->hashedcdkey ));
 	}
 
 	return result;
+}
+
+sv_client_t *SV_ClientById( int id )
+{
+	sv_client_t *cl;
+	int i;
+
+	ASSERT( id >= 0 );
+
+	for( i = 0, cl = svs.clients; i < svgame.globals->maxClients; i++, cl++ )
+	{
+		if( !cl->state )
+			continue;
+
+		if( cl->userid == id )
+			return cl;
+	}
+
+	return NULL;
+}
+
+sv_client_t *SV_ClientByName( const char *name )
+{
+	sv_client_t *cl;
+	int i;
+
+	ASSERT( name && *name );
+
+	for( i = 0, cl = svs.clients; i < svgame.globals->maxClients; i++, cl++ )
+	{
+		if( !cl->state )
+			continue;
+
+		if( !Q_strcmp( cl->name, name ) )
+			return cl;
+	}
+
+	return NULL;
 }
 
 /*
@@ -1084,7 +1146,7 @@ void SV_FullClientUpdate( sv_client_t *cl, sizebuf_t *msg )
 		MSG_WriteString( msg, info );
 
 		MD5Init( &ctx );
-		MD5Update( &ctx, cl->hashedcdkey, sizeof( cl->hashedcdkey ));
+		MD5Update( &ctx, (byte *)cl->hashedcdkey, sizeof( cl->hashedcdkey ));
 		MD5Final( digest, &ctx );
 
 		MSG_WriteBytes( msg, digest, sizeof( digest ));
@@ -2146,6 +2208,10 @@ void SV_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 	char buf[MAX_SYSPATH];
 	int	len = sizeof( buf );
 
+	// prevent flooding from banned address
+	if( SV_CheckIP( &from ) )
+		return;
+
 	MSG_Clear( msg );
 	MSG_ReadLong( msg );// skip the -1 marker
 
@@ -2169,7 +2235,7 @@ void SV_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 	else if( svgame.dllFuncs.pfnConnectionlessPacket( &from, args, buf, &len ))
 	{
 		// user out of band message (must be handled in CL_ConnectionlessPacket)
-		if( len > 0 ) Netchan_OutOfBand( NS_SERVER, from, len, buf );
+		if( len > 0 ) Netchan_OutOfBand( NS_SERVER, from, len, (byte*)buf );
 	}
 	else Con_DPrintf( S_ERROR "bad connectionless packet from %s:\n%s\n", NET_AdrToString( from ), args );
 }
@@ -2461,7 +2527,7 @@ void SV_ExecuteClientMessage( sv_client_t *cl, sizebuf_t *msg )
 	if( frame->senttime == 0.0f ) frame->ping_time = 0.0f;
 
 	// don't skew ping based on signon stuff either
-	if(( host.realtime - cl->connection_started ) < 2.0f && ( frame->ping_time > 0.0 ))
+	if(( host.realtime - cl->connection_started ) < 2.0f && ( frame->ping_time > 0.0f ))
 		frame->ping_time = 0.0f;
 
 	cl->latency = SV_CalcClientTime( cl );

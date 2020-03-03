@@ -12,7 +12,10 @@ convar_t *gl_vsync;
 convar_t *gl_showtextures;
 convar_t *r_decals;
 convar_t *r_adjust_fov;
+convar_t *r_showtree;
 convar_t *gl_wgl_msaa_samples;
+convar_t *gl_clear;
+convar_t *r_refdll;
 
 void R_GetTextureParms( int *w, int *h, int texnum )
 {
@@ -27,15 +30,18 @@ GL_FreeImage
 Frees image by name
 ================
 */
-void GL_FreeImage( const char *name )
+void GAME_EXPORT GL_FreeImage( const char *name )
 {
 	int	texnum;
+
+	if( !ref.initialized )
+		return;
 
 	if(( texnum = ref.dllFuncs.GL_FindTexture( name )) != 0 )
 		 ref.dllFuncs.GL_FreeTexture( texnum );
 }
 
-int GL_RenderFrame( const ref_viewpass_t *rvp )
+void GL_RenderFrame( const ref_viewpass_t *rvp )
 {
 	refState.time      = cl.time;
 	refState.oldtime   = cl.oldtime;
@@ -52,11 +58,6 @@ int GL_RenderFrame( const ref_viewpass_t *rvp )
 static int pfnEngineGetParm( int parm, int arg )
 {
 	return CL_RenderGetParm( parm, arg, false ); // prevent recursion
-}
-
-static void pfnCbuf_SetOpenGLConfigHack( qboolean set )
-{
-	host.apply_opengl_config = set;
 }
 
 static world_static_t *pfnGetWorld( void )
@@ -118,7 +119,7 @@ static void pfnGetPredictedOrigin( vec3_t v )
 	VectorCopy( cl.simorg, v );
 }
 
-static color24 *pfnCL_GetPaletteColor(int color) // clgame.palette[color]
+static color24 *pfnCL_GetPaletteColor( int color ) // clgame.palette[color]
 {
 	return &clgame.palette[color];
 }
@@ -197,17 +198,46 @@ static screenfade_t *pfnRefGetScreenFade( void )
 	return &clgame.fade;
 }
 
+/*
+===============
+R_DoResetGamma
+gamma will be reset for
+some type of screenshots
+===============
+*/
+static qboolean R_DoResetGamma( void )
+{
+	switch( cls.scrshot_action )
+	{
+	case scrshot_envshot:
+	case scrshot_skyshot:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static qboolean R_Init_Video_( const int type )
+{
+	host.apply_opengl_config = true;
+	Cbuf_AddText( va( "exec %s.cfg", ref.dllFuncs.R_GetConfigName()));
+	Cbuf_Execute();
+	host.apply_opengl_config = false;
+
+	return R_Init_Video( type );
+}
+
 static ref_api_t gEngfuncs =
 {
 	pfnEngineGetParm,
 
-	Cvar_Get,
-	Cvar_FindVarExt,
+	(void*)Cvar_Get,
+	(void*)Cvar_FindVarExt,
 	Cvar_VariableValue,
 	Cvar_VariableString,
 	Cvar_SetValue,
 	Cvar_Set,
-	Cvar_RegisterVariable,
+	(void*)Cvar_RegisterVariable,
 	Cvar_FullSet,
 
 	Cmd_AddRefCommand,
@@ -219,7 +249,6 @@ static ref_api_t gEngfuncs =
 	Cbuf_AddText,
 	Cbuf_InsertText,
 	Cbuf_Execute,
-	pfnCbuf_SetOpenGLConfigHack,
 
 	Con_Printf,
 	Con_DPrintf,
@@ -271,7 +300,6 @@ static ref_api_t gEngfuncs =
 	CL_UpdateRemapInfo,
 
 	CL_ExtraUpdate,
-	COM_HashKey,
 	Host_Error,
 	COM_SetRandomSeed,
 	COM_RandomFloat,
@@ -306,7 +334,7 @@ static ref_api_t gEngfuncs =
 	FS_FileExists,
 	FS_AllowDirectPaths,
 
-	R_Init_Video,
+	R_Init_Video_,
 	R_Free_Video,
 
 	GL_SetAttribute,
@@ -320,6 +348,7 @@ static ref_api_t gEngfuncs =
 
 	BuildGammaTable,
 	LightToTexGamma,
+	R_DoResetGamma,
 
 	CL_GetLightStyle,
 	CL_GetDynamicLight,
@@ -404,30 +433,20 @@ static qboolean R_LoadProgs( const char *name )
 
 	if( ref.hInstance ) R_UnloadProgs();
 
-#ifdef XASH_INTERNAL_GAMELIBS
+	FS_AllowDirectPaths( true );
 	if( !(ref.hInstance = COM_LoadLibrary( name, false, true ) ))
 	{
+		FS_AllowDirectPaths( false );
+		Con_Reportf( "R_LoadProgs: can't load renderer library %s: %s\n", name, COM_GetLibraryError() );
 		return false;
 	}
-#else
-	if( !(ref.hInstance = COM_LoadLibrary( name, false, true ) ))
-	{
-		FS_AllowDirectPaths( true );
-		if( !(ref.hInstance = COM_LoadLibrary( name, false, true ) ))
-		{
-			FS_AllowDirectPaths( false );
-			return false;
-		}
-
-	}
-#endif
 
 	FS_AllowDirectPaths( false );
 
-	if( ( GetRefAPI = (REFAPI)COM_GetProcAddress( ref.hInstance, "GetRefAPI" )) == NULL )
+	if( !( GetRefAPI = (REFAPI)COM_GetProcAddress( ref.hInstance, GET_REF_API )) )
 	{
 		COM_FreeLibrary( ref.hInstance );
-		Con_Reportf( "R_LoadProgs: can't init renderer API\n" );
+		Con_Reportf( "R_LoadProgs: can't find GetRefAPI entry point in %s\n", name );
 		ref.hInstance = NULL;
 		return false;
 	}
@@ -482,50 +501,186 @@ void R_Shutdown( void )
 	ref.initialized = false;
 }
 
-void R_GetRendererName( char *dest, size_t size, const char *refdll )
+static void R_GetRendererName( char *dest, size_t size, const char *opt )
 {
-	Q_snprintf( dest, size, "%sref_%s.%s",
-#ifdef OS_LIB_PREFIX
-		OS_LIB_PREFIX,
+	if( !Q_strstr( opt, va( ".%s", OS_LIB_EXT )))
+	{
+		const char *format;
+
+#ifdef XASH_INTERNAL_GAMELIBS
+		if( !Q_strcmp( opt, "ref_" ))
+			format = "%s";
+		else
+			format = "ref_%s";
 #else
-		"",
+		if( !Q_strcmp( opt, "ref_" ))
+			format = OS_LIB_PREFIX "%s." OS_LIB_EXT;
+		else
+			format = OS_LIB_PREFIX "ref_%s." OS_LIB_EXT;
 #endif
-		refdll, OS_LIB_EXT );
-}
+		Q_snprintf( dest, size, format, opt );
 
-qboolean R_Init( void )
-{
-	string refopt, refdll;
-
-	if( !Sys_GetParmFromCmdLine( "-ref", refopt ) )
-	{
-		// compile-time defaults
-		R_GetRendererName( refdll, sizeof( refdll ), DEFAULT_RENDERER );
-		Con_Printf( "Loading default renderer: %s\n", refdll );
-	}
-	else if( !Q_strstr( refopt, va( ".%s", OS_LIB_EXT ) ) )
-	{
-		// shortened renderer name
-		R_GetRendererName( refdll, sizeof( refdll ), refopt );
-		Con_Printf( "Loading renderer by short name: %s\n", refdll );
 	}
 	else
 	{
 		// full path
-		Q_strcpy( refdll, refopt );
-		Con_Printf( "Loading renderer: %s\n", refdll );
+		Q_strcpy( dest, opt );
 	}
+}
 
-	gl_vsync = Cvar_Get( "gl_vsync", "0", FCVAR_ARCHIVE,  "enable vertical syncronization" );
-	gl_showtextures = Cvar_Get( "gl_showtextures", "0", FCVAR_CHEAT, "show all uploaded textures" );
-	r_adjust_fov = Cvar_Get( "r_adjust_fov", "1", FCVAR_ARCHIVE, "making FOV adjustment for wide-screens" );
-	r_decals = Cvar_Get( "r_decals", "4096", FCVAR_ARCHIVE, "sets the maximum number of decals" );
-	gl_wgl_msaa_samples = Cvar_Get( "gl_wgl_msaa_samples", "0", FCVAR_GLCONFIG, "samples number for multisample anti-aliasing" );
+static qboolean R_LoadRenderer( const char *refopt )
+{
+	string refdll;
+
+	R_GetRendererName( refdll, sizeof( refdll ), refopt );
+
+	Con_Printf( "Loading renderer: %s -> %s\n", refopt, refdll );
 
 	if( !R_LoadProgs( refdll ))
 	{
 		R_Shutdown();
-		Host_Error( "Can't initialize %s renderer!\n", refdll );
+		Sys_Warn( S_ERROR "Can't initialize %s renderer!\n", refdll );
+		return false;
+	}
+
+	Con_Reportf( "Renderer %s initialized\n", refdll );
+
+	return true;
+}
+
+static void SetWidthAndHeightFromCommandLine( void )
+{
+	int width, height;
+
+	Sys_GetIntFromCmdLine( "-width", &width );
+	Sys_GetIntFromCmdLine( "-height", &height );
+
+	if( width < 1 || height < 1 )
+	{
+		// Not specified or invalid, so don't bother.
+		return;
+	}
+
+	R_SaveVideoMode( width, height, width, height );
+}
+
+static void SetFullscreenModeFromCommandLine( void )
+{
+#if !XASH_MOBILE_PLATFORM
+	if ( Sys_CheckParm("-fullscreen") )
+	{
+		Cvar_Set( "fullscreen", "1" );
+	}
+	else if ( Sys_CheckParm( "-windowed" ) )
+	{
+		Cvar_Set( "fullscreen", "0" );
+	}
+#endif
+}
+
+void R_CollectRendererNames( void )
+{
+	const char *renderers[] = DEFAULT_RENDERERS;
+	int i;
+
+	ref.numRenderers = 0;
+
+	for( i = 0; i < DEFAULT_RENDERERS_LEN; i++ )
+	{
+		string temp;
+		void *dll, *pfn;
+
+		R_GetRendererName( temp, sizeof( temp ), renderers[i] );
+
+		dll = COM_LoadLibrary( temp, false, true );
+		if( !dll )
+		{
+			Con_Reportf( "R_CollectRendererNames: can't load library %s: %s\n", temp, COM_GetLibraryError() );
+			continue;
+		}
+
+		pfn = COM_GetProcAddress( dll, GET_REF_API );
+		if( !pfn )
+		{
+			Con_Reportf( "R_CollectRendererNames: can't find API entry point in %s\n", temp );
+			COM_FreeLibrary( dll );
+			continue;
+		}
+
+		Q_strncpy( ref.shortNames[i], renderers[i], sizeof( ref.shortNames[i] ));
+
+		pfn = COM_GetProcAddress( dll, GET_REF_HUMANREADABLE_NAME );
+		if( !pfn ) // just in case
+		{
+			Con_Reportf( "R_CollectRendererNames: can't find GetHumanReadableName export in %s\n", temp );
+			Q_strncpy( ref.readableNames[i], renderers[i], sizeof( ref.readableNames[i] ));
+		}
+		else
+		{
+			REF_HUMANREADABLE_NAME GetHumanReadableName = (REF_HUMANREADABLE_NAME)pfn;
+
+			GetHumanReadableName( ref.readableNames[i], sizeof( ref.readableNames[i] ));
+		}
+
+		Con_Printf( "Found renderer %s: %s\n", ref.shortNames[i], ref.readableNames[i] );
+
+		ref.numRenderers++;
+		COM_FreeLibrary( dll );
+	}
+}
+
+qboolean R_Init( void )
+{
+	qboolean success = false;
+	string refopt;
+
+	gl_vsync = Cvar_Get( "gl_vsync", "0", FCVAR_ARCHIVE,  "enable vertical syncronization" );
+	gl_showtextures = Cvar_Get( "r_showtextures", "0", FCVAR_CHEAT, "show all uploaded textures" );
+	r_adjust_fov = Cvar_Get( "r_adjust_fov", "1", FCVAR_ARCHIVE, "making FOV adjustment for wide-screens" );
+	r_decals = Cvar_Get( "r_decals", "4096", FCVAR_ARCHIVE, "sets the maximum number of decals" );
+	gl_wgl_msaa_samples = Cvar_Get( "gl_wgl_msaa_samples", "0", FCVAR_GLCONFIG, "samples number for multisample anti-aliasing" );
+	gl_clear = Cvar_Get( "gl_clear", "0", FCVAR_ARCHIVE, "clearing screen after each frame" );
+	r_showtree = Cvar_Get( "r_showtree", "0", FCVAR_ARCHIVE, "build the graph of visible BSP tree" );
+	r_refdll = Cvar_Get( "r_refdll", "", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "choose renderer implementation, if supported" );
+
+	// cvars are created, execute video config
+	Cbuf_AddText( "exec video.cfg" );
+	Cbuf_Execute();
+
+	// Set screen resolution and fullscreen mode if passed in on command line.
+	// this is done after executing video.cfg, as the command line values should take priority.
+	SetWidthAndHeightFromCommandLine();
+	SetFullscreenModeFromCommandLine();
+
+	R_CollectRendererNames();
+
+	// command line have priority
+	if( !Sys_GetParmFromCmdLine( "-ref", refopt ) )
+	{
+		// r_refdll is set to empty by default, so we can change hardcoded defaults just in case
+		Q_strncpy( refopt, COM_CheckString( r_refdll->string ) ?
+			r_refdll->string : DEFAULT_ACCELERATED_RENDERER, sizeof( refopt ) );
+	}
+
+	if( !(success = R_LoadRenderer( refopt )))
+	{
+		// check if we are tried to load default accelearated renderer already
+		// and if not, load it first
+		if( Q_strcmp( refopt, DEFAULT_ACCELERATED_RENDERER ) )
+		{
+			success = R_LoadRenderer( refopt );
+		}
+
+		// software renderer is the last chance...
+		if( !success )
+		{
+			success = R_LoadRenderer( DEFAULT_SOFTWARE_RENDERER );
+		}
+	}
+
+	if( !success )
+	{
+		Host_Error( "Can't initialize any renderer. Check your video drivers!" );
 		return false;
 	}
 

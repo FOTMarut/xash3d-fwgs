@@ -21,7 +21,7 @@ GNU General Public License for more details.
 #include "ref_common.h"
 
 typedef int (*PHYSICAPI)( int, server_physics_api_t*, physics_interface_t* );
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 extern triangleapi_t gTriApi;
 #endif
 
@@ -373,7 +373,7 @@ float SV_RecursiveWaterLevel( vec3_t origin, float out, float in, int count )
 	vec3_t	point;
 	float	offset;
 
-	offset = ((out - in) * 0.5) + in;
+	offset = ((out - in) * 0.5f) + in;
 	if( ++count > 5 ) return offset;
 
 	VectorSet( point, origin[0], origin[1], origin[2] + offset );
@@ -409,7 +409,8 @@ float SV_Submerged( edict_t *ent )
 		svs.groupmask = ent->v.groupinfo;
 		if( SV_PointContents( point ) == CONTENTS_WATER )
 			return (ent->v.maxs[2] - ent->v.mins[2]);
-	case 2:	// intentionally fallthrough
+		// intentionally fallthrough
+	case 2:
 		bottom = SV_RecursiveWaterLevel( center, ent->v.absmax[2] - center[2], 0.0f, 0 );
 		return bottom - start;
 	}
@@ -609,8 +610,8 @@ int SV_FlyMove( edict_t *ent, float time, trace_t *steptrace )
 		{
 			blocked |= 1; // floor
 
-         			if( trace.ent->v.solid == SOLID_BSP || trace.ent->v.solid == SOLID_SLIDEBOX ||
-			trace.ent->v.movetype == MOVETYPE_PUSHSTEP || (trace.ent->v.flags & FL_CLIENT))
+			if( trace.ent->v.solid == SOLID_BSP || trace.ent->v.solid == SOLID_SLIDEBOX ||
+				trace.ent->v.movetype == MOVETYPE_PUSHSTEP || (trace.ent->v.flags & FL_CLIENT))
 			{
 				SetBits( ent->v.flags, FL_ONGROUND );
 				ent->v.groundentity = trace.ent;
@@ -866,7 +867,7 @@ allow entity to block pusher?
 static qboolean SV_CanBlock( edict_t *ent )
 {
 	if( ent->v.mins[0] == ent->v.maxs[0] )
-      		return false;
+		return false;
 
 	if( ent->v.solid == SOLID_NOT || ent->v.solid == SOLID_TRIGGER )
 	{
@@ -874,7 +875,7 @@ static qboolean SV_CanBlock( edict_t *ent )
 		ent->v.mins[0] = ent->v.mins[1] = 0;
 		VectorCopy( ent->v.mins, ent->v.maxs );
 		return false;
-          }
+	}
 
 	return true;
 }
@@ -1098,7 +1099,7 @@ static edict_t *SV_PushRotate( edict_t *pusher, float movetime )
 			if( lmove[2] != 0.0f ) check->v.flags &= ~FL_ONGROUND;
 			if( lmove[2] < 0.0f && !pusher->v.dmg )
 				lmove[2] = 0.0f; // let's the free falling
-                    }
+		}
 
 		// try moving the contacted entity 
 		pusher->v.solid = SOLID_NOT;
@@ -1375,7 +1376,7 @@ void SV_CheckWaterTransition( edict_t *ent )
 		{	
 			// just crossed into water
 			SV_StartSound( ent, CHAN_AUTO, "player/pl_wade1.wav", 1.0f, ATTN_NORM, 0, 100 );
-			ent->v.velocity[2] *= 0.5;
+			ent->v.velocity[2] *= 0.5f;
 		}		
 
 		ent->v.watertype = cont;
@@ -1471,7 +1472,7 @@ void SV_Physics_Toss( edict_t *ent )
 	case MOVETYPE_TOSS:
 	case MOVETYPE_BOUNCE:
 		SV_AngularMove( ent, sv.frametime, ent->v.friction );
-		break;         
+		break;
 	default:
 		SV_AngularMove( ent, sv.frametime, 0.0f );
 		break;
@@ -1795,7 +1796,7 @@ void SV_Physics( void )
 			continue;
 
 		if( i > 0 && i <= svs.maxclients )
-                   		continue;
+			continue;
 
 		SV_Physics_Entity( ent );
 	}
@@ -1966,7 +1967,7 @@ pfnPointContents
 
 =============
 */
-static int pfnPointContents( const float *pos, int groupmask )
+static int GAME_EXPORT pfnPointContents( const float *pos, int groupmask )
 {
 	int	oldmask, cont;
 
@@ -2005,7 +2006,7 @@ const char* pfnGetModelName( int modelindex )
 
 static const byte *GL_TextureData( unsigned int texnum )
 {
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	return Host_IsDedicated() ? NULL : ref.dllFuncs.GL_TextureData( texnum );
 #else // XASH_DEDICATED
 	return NULL;
@@ -2021,7 +2022,7 @@ static server_physics_api_t gPhysicsAPI =
 	SV_GetHeadNode,
 	SV_ServerState,
 	Host_Error,
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	&gTriApi,	// ouch!
 	pfnDrawConsoleString,
 	pfnDrawSetTextColor,

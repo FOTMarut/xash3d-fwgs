@@ -24,6 +24,10 @@ GNU General Public License for more details.
 //#include "client.h"
 #include "pmtrace.h"
 
+#if HAVE_TGMATH_H
+#include <tgmath.h>
+#endif
+
 #define EVENT_CLIENT	5000	// less than this value it's a server-side studio events
 #define MAX_LOCALLIGHTS	4
 
@@ -641,7 +645,7 @@ float R_StudioEstimateFrame( cl_entity_t *e, mstudioseqdesc_t *pseqdesc )
 	else dfdt = 0;
 
 	if( pseqdesc->numframes <= 1 ) f = 0.0;
-	else f = (e->curstate.frame * (pseqdesc->numframes - 1)) / 256.0;
+	else f = (e->curstate.frame * (pseqdesc->numframes - 1)) / 256.0f;
  
 	f += dfdt;
 
@@ -879,7 +883,7 @@ void R_StudioMergeBones( cl_entity_t *e, model_t *m_pSubModel )
 	matrix3x4		bonematrix;
 	static vec4_t	q[MAXSTUDIOBONES];
 	static float	pos[MAXSTUDIOBONES][3];
-	double		f;
+	float		f;
 
 	if( e->curstate.sequence >=  m_pStudioHeader->numseq )
 		e->curstate.sequence = 0;
@@ -932,7 +936,7 @@ StudioSetupBones
 */
 void R_StudioSetupBones( cl_entity_t *e )
 {
-	double		f;
+	float		f;
 	mstudiobone_t	*pbones;
 	mstudioseqdesc_t	*pseqdesc;
 	mstudioanim_t	*panim;
@@ -1132,7 +1136,7 @@ void R_StudioBuildNormalTable( void )
 		pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex) + j;
 		ptricmds = (short *)((byte *)m_pStudioHeader + pmesh->triindex);
 
-		while( i = *( ptricmds++ ))
+		while(( i = *( ptricmds++ )))
 		{
 			if( i < 0 ) i = -i;
 
@@ -1180,7 +1184,7 @@ void R_StudioGenerateNormals( void )
 		pmesh = (mstudiomesh_t *)((byte *)m_pStudioHeader + m_pSubModel->meshindex) + j;
 		ptricmds = (short *)((byte *)m_pStudioHeader + pmesh->triindex);
 
-		while( i = *( ptricmds++ ))
+		while(( i = *( ptricmds++ )))
 		{
 			if( i < 0 )
 			{
@@ -1302,8 +1306,6 @@ StudioCalcAttachments
 static void R_StudioCalcAttachments( void )
 {
 	mstudioattachment_t	*pAtt;
-	vec3_t		forward, bonepos;
-	vec3_t		localOrg, localAng;
 	int		i;
 
 	// calculate attachment points
@@ -1312,11 +1314,6 @@ static void R_StudioCalcAttachments( void )
 	for( i = 0; i < Q_min( MAXSTUDIOATTACHMENTS, m_pStudioHeader->numattachments ); i++ )
 	{
 		Matrix3x4_VectorTransform( g_studio.lighttransform[pAtt[i].bone], pAtt[i].org, RI.currententity->attachment[i] );
-		VectorSubtract( RI.currententity->attachment[i], RI.currententity->origin, localOrg );
-		Matrix3x4_OriginFromMatrix( g_studio.lighttransform[pAtt[i].bone], bonepos );
-		VectorSubtract( localOrg, bonepos, forward );	// make forward
-		VectorNormalizeFast( forward );
-		VectorAngles( forward, localAng );
 	}
 }
 
@@ -1939,12 +1936,12 @@ R_StudioMeshCompare
 Sorting opaque entities by model type
 ===============
 */
-static int R_StudioMeshCompare( const sortedmesh_t *a, const sortedmesh_t *b )
+static int R_StudioMeshCompare( const void *a, const void *b )
 {
-	if( FBitSet( a->flags, STUDIO_NF_ADDITIVE ))
+	if( FBitSet( ((const sortedmesh_t*)a)->flags, STUDIO_NF_ADDITIVE ))
 		return 1;
 
-	if( FBitSet( a->flags, STUDIO_NF_MASKED ))
+	if( FBitSet( ((const sortedmesh_t*)a)->flags, STUDIO_NF_MASKED ))
 		return -1;
 
 	return 0;
@@ -1962,7 +1959,7 @@ _inline void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, floa
 	float	*lv;
 	int	i;
 
-	while( i = *( ptricmds++ ))
+	while(( i = *( ptricmds++ )))
 	{
 		if( i < 0 )
 		{
@@ -1995,7 +1992,7 @@ _inline void R_StudioDrawFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 	float	*lv;
 	int	i;
 
-	while( i = *( ptricmds++ ))
+	while(( i = *( ptricmds++ )))
 	{
 		if( i < 0 )
 		{
@@ -2029,7 +2026,7 @@ _inline void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, floa
 	qboolean	glowShell = (scale > 0.0f) ? true : false;
 	vec3_t	vert;
 
-	while( i = *( ptricmds++ ))
+	while(( i = *( ptricmds++ )))
 	{
 		if( i < 0 )
 		{
@@ -2116,7 +2113,7 @@ _inline void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms
 	int	i;
 	float alpha = tr.blend;
 
-	while( i = *( ptricmds++ ))
+	while(( i = *( ptricmds++ )))
 	{
 		int vertexState = 0;
 		qboolean tri_strip = true;
@@ -2159,7 +2156,7 @@ _inline void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms 
 	int	i;
 	float alpha = tr.blend;
 
-	while( i = *( ptricmds++ ))
+	while(( i = *( ptricmds++ )))
 	{
 		int vertexState = 0;
 		qboolean tri_strip = true;
@@ -2204,7 +2201,7 @@ _inline void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms
 	vec3_t	vert;
 	float alpha = tr.blend;
 
-	while( i = *( ptricmds++ ))
+	while(( i = *( ptricmds++ )))
 	{
 		int vertexState = 0;
 		qboolean tri_strip = true;
@@ -2267,7 +2264,7 @@ _inline void R_StudioDrawArrays( uint startverts, uint startelems )
 		pglColorPointer( 4, GL_UNSIGNED_BYTE, 0, g_studio.arraycolor );
 	}
 
-#if !defined XASH_NANOGL || defined XASH_WES && defined __EMSCRIPTEN__ // WebGL need to know array sizes
+#if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 	if( pglDrawRangeElements )
 		pglDrawRangeElements( GL_TRIANGLES, startverts, g_studio.numverts,
 			g_studio.numelems - startelems, GL_UNSIGNED_SHORT, &g_studio.arrayelems[startelems] );
@@ -2675,11 +2672,11 @@ R_StudioSetRemapColors
 */
 static void R_StudioSetRemapColors( int newTop, int newBottom )
 {
-	gEngfuncs.CL_AllocRemapInfo( newTop, newBottom );
+	gEngfuncs.CL_AllocRemapInfo( RI.currententity, newTop, newBottom );
 
 	if( gEngfuncs.CL_GetRemapInfoForEntity( RI.currententity ))
 	{
-		gEngfuncs.CL_UpdateRemapInfo( newTop, newBottom );
+		gEngfuncs.CL_UpdateRemapInfo( RI.currententity, newTop, newBottom );
 		m_fDoRemap = true;
 	}
 }
@@ -2994,7 +2991,7 @@ static void R_StudioDrawPointsShadow( void )
 
 		r_stats.c_studio_polys += pmesh->numtris;
 
-		while( i = *( ptricmds++ ))
+		while(( i = *( ptricmds++ )))
 		{
 			if( i < 0 )
 			{
@@ -3075,7 +3072,7 @@ static void GL_StudioDrawShadow( void )
 
 	if( r_shadows.value && g_studio.rendermode != kRenderTransAdd && !FBitSet( RI.currentmodel->flags, STUDIO_AMBIENT_LIGHT ))
 	{
-		float	color = 1.0 - (tr.blend * 0.5);
+		float	color = 1.0f - (tr.blend * 0.5f);
 
 		pglDisable( GL_TEXTURE_2D );
 		pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
@@ -3118,7 +3115,7 @@ void R_StudioRenderFinal( void )
 	{
 		for( i = 0; i < m_pStudioHeader->numbodyparts; i++ )
 		{
-			R_StudioSetupModel( i, &m_pBodyPart, &m_pSubModel );
+			R_StudioSetupModel( i, (void**)&m_pBodyPart, (void**)&m_pSubModel );
 
 			GL_StudioSetRenderMode( rendermode );
 			R_StudioDrawPoints();
@@ -3257,7 +3254,7 @@ void R_StudioEstimateGait( entity_state_t *pplayer )
 	}
 	else
 	{
-		m_pPlayerInfo->gaityaw = ( atan2( est_velocity[1], est_velocity[0] ) * 180 / M_PI );
+		m_pPlayerInfo->gaityaw = ( atan2( est_velocity[1], est_velocity[0] ) * 180 / M_PI_F );
 		if( m_pPlayerInfo->gaityaw > 180.0f ) m_pPlayerInfo->gaityaw = 180.0f;
 		if( m_pPlayerInfo->gaityaw < -180.0f ) m_pPlayerInfo->gaityaw = -180.0f;
 	}
@@ -3826,7 +3823,7 @@ static void R_StudioLoadTexture( model_t *mod, studiohdr_t *phdr, mstudiotexture
 	gEngfuncs.Image_SetMDLPointer((byte *)phdr + ptexture->index);
 	size = sizeof( mstudiotexture_t ) + ptexture->width * ptexture->height + 768;
 
-	if( FBitSet( ENGINE_GET_PARM( PARM_FEATURES ), ENGINE_LOAD_DELUXEDATA ) && FBitSet( ptexture->flags, STUDIO_NF_MASKED ))
+	if( FBitSet( ENGINE_GET_PARM( PARM_FEATURES ), ENGINE_IMPROVED_LINETRACE ) && FBitSet( ptexture->flags, STUDIO_NF_MASKED ))
 		flags |= TF_KEEP_SOURCE; // Paranoia2 texture alpha-tracing
 
 	// build the texname

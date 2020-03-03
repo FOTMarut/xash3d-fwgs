@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "con_nprint.h"
 #include "qfont.h"
 #include "wadfile.h"
+#include "input.h"
 
 convar_t	*con_notifytime;
 convar_t	*scr_conspeed;
@@ -36,14 +37,18 @@ static qboolean g_utf8 = false;
 #define COLOR_DEFAULT	'7'
 #define CON_HISTORY		64
 #define MAX_DBG_NOTIFY	128
+#if XASH_LOW_MEMORY
+#define CON_NUMFONTS	1		// do not load different font textures
+#define CON_TEXTSIZE	32768	// max scrollback buffer characters in console (32 kb)
+#define CON_MAXLINES	2048	// max scrollback buffer lines in console
+#else
 #define CON_NUMFONTS	3	// maxfonts
-
+#define CON_TEXTSIZE	1048576	// max scrollback buffer characters in console (1 Mb)
+#define CON_MAXLINES	16384	// max scrollback buffer lines in console
+#endif
 #define CON_LINES( i )	(con.lines[(con.lines_first + (i)) % con.maxlines])
 #define CON_LINES_COUNT	con.lines_count
 #define CON_LINES_LAST()	CON_LINES( CON_LINES_COUNT - 1 )
-
-#define CON_TEXTSIZE	1048576	// max scrollback buffer characters in console (1 Mb)
-#define CON_MAXLINES	16384	// max scrollback buffer lines in console
 
 // console color typeing
 rgba_t g_color_table[8] =
@@ -117,6 +122,9 @@ typedef struct
 
 	notify_t		notify[MAX_DBG_NOTIFY]; // for Con_NXPrintf
 	qboolean		draw_notify;	// true if we have NXPrint message
+
+	// console update
+	double		lastupdate;
 } console_t;
 
 static console_t		con;
@@ -144,7 +152,7 @@ void Con_SetColor_f( void )
 {
 	vec3_t	color;
 
-	switch( Cmd_Argc() )
+	switch( Cmd_Argc( ))
 	{
 	case 1:
 		Con_Printf( "\"con_color\" is %i %i %i\n", g_color_table[7][0], g_color_table[7][1], g_color_table[7][2] );
@@ -401,9 +409,9 @@ Con_AddLine
 Appends a given string as a new line to the console.
 ================
 */
-void Con_AddLine( const char *line, int length )
+void Con_AddLine( const char *line, int length, qboolean newline )
 {
-	byte		*putpos;
+	char		*putpos;
 	con_lineinfo_t	*p;
 
 	if( !con.initialized || !con.buffer )
@@ -417,14 +425,27 @@ void Con_AddLine( const char *line, int length )
 	while( !( putpos = Con_BytesLeft( length )) || con.lines_count >= con.maxlines )
 		Con_DeleteLine();
 
-	memcpy( putpos, line, length );
-	putpos[length - 1] = '\0';
-	con.lines_count++;
+	if( newline )
+	{
+		memcpy( putpos, line, length );
+		putpos[length - 1] = '\0';
+		con.lines_count++;
 
-	p = &CON_LINES_LAST();
-	p->start = putpos;
-	p->length = length;
-	p->addtime = cl.time;
+		p = &CON_LINES_LAST();
+		p->start = putpos;
+		p->length = length;
+		p->addtime = cl.time;
+	}
+	else
+	{
+		p = &CON_LINES_LAST();
+		putpos = p->start + Q_strlen( p->start );
+		memcpy( putpos, line, length - 1 );
+		p->length = Q_strlen( p->start );
+		putpos[p->length] = '\0';
+		p->addtime = cl.time;
+		p->length++;
+	}
 }
 
 /*
@@ -503,7 +524,7 @@ void Con_Bottom( void )
 Con_Visible
 ================
 */
-int Con_Visible( void )
+int GAME_EXPORT Con_Visible( void )
 {
 	return (con.vislines > 0);
 }
@@ -558,7 +579,7 @@ static qboolean Con_LoadVariableWidthFont( const char *fontname, cl_font_t *font
 {
 	int	i, fontWidth;
 	byte	*buffer;
-	size_t	length;
+	fs_offset_t	length;
 	qfont_t	*src;
 
 	if( font->valid )
@@ -579,7 +600,7 @@ static qboolean Con_LoadVariableWidthFont( const char *fontname, cl_font_t *font
 		if( buffer && length >= sizeof( qfont_t ))
 		{
 			src = (qfont_t *)buffer;
-			font->charHeight = src->rowheight * con_fontscale->value;;
+			font->charHeight = src->rowheight * con_fontscale->value;
 			font->type = FONT_VARIABLE;
 
 			// build rectangles
@@ -589,7 +610,7 @@ static qboolean Con_LoadVariableWidthFont( const char *fontname, cl_font_t *font
 				font->fontRc[i].right = font->fontRc[i].left + src->fontinfo[i].charwidth;
 				font->fontRc[i].top = (word)src->fontinfo[i].startoffset / fontWidth;
 				font->fontRc[i].bottom = font->fontRc[i].top + src->rowheight;
-				font->charWidths[i] = src->fontinfo[i].charwidth * con_fontscale->value;;
+				font->charWidths[i] = src->fontinfo[i].charwidth * con_fontscale->value;
 			}
 			font->valid = true;
 		}
@@ -646,7 +667,7 @@ static void Con_LoadConchars( void )
 	int	i, fontSize;
 
 	// load all the console fonts
-	for( i = 0; i < 3; i++ )
+	for( i = 0; i < CON_NUMFONTS; i++ )
 		Con_LoadConsoleFont( i, con.chars + i );
 
 	// select properly fontsize
@@ -655,6 +676,9 @@ static void Con_LoadConchars( void )
 	else if( refState.width >= 1280 )
 		fontSize = 2;
 	else fontSize = 1;
+
+	if( fontSize > CON_NUMFONTS - 1 )
+		fontSize = CON_NUMFONTS - 1;
 
 	// sets the current font
 	con.lastUsedFont = con.curFont = &con.chars[fontSize];
@@ -807,7 +831,7 @@ int Con_UtfMoveRight( char *str, int pos, int length )
 static void Con_DrawCharToConback( int num, const byte *conchars, byte *dest )
 {
 	int	row, col;
-	byte	*source;
+	const byte	*source;
 	int	drawline;
 	int	x;
 
@@ -883,7 +907,7 @@ static int Con_DrawGenericChar( int x, int y, int number, rgba_t color )
 		return con.curFont->charWidths[number];
 
 	// don't apply color to fixed fonts it's already colored
-	if( con.curFont->type != FONT_FIXED || REF_GET_PARM( PARM_TEX_GLFORMAT, 0x8045 ) ) // GL_LUMINANCE8_ALPHA8
+	if( con.curFont->type != FONT_FIXED || REF_GET_PARM( PARM_TEX_GLFORMAT, con.curFont->hFontTexture ) == 0x8045 ) // GL_LUMINANCE8_ALPHA8
 		ref.dllFuncs.Color4ub( color[0], color[1], color[2], color[3] );
 	else ref.dllFuncs.Color4ub( 255, 255, 255, color[3] );
 
@@ -912,7 +936,7 @@ choose font size
 */
 void Con_SetFont( int fontNum )
 {
-	fontNum = bound( 0, fontNum, 2 ); 
+	fontNum = bound( 0, fontNum, CON_NUMFONTS - 1 );
 	con.curFont = &con.chars[fontNum];
 }
 
@@ -962,7 +986,7 @@ Con_DrawStringLen
 compute string width and height in screen pixels
 ====================
 */
-void Con_DrawStringLen( const char *pText, int *length, int *height )
+void GAME_EXPORT Con_DrawStringLen( const char *pText, int *length, int *height )
 {
 	int	curLength = 0;
 
@@ -1058,7 +1082,7 @@ int Con_DrawGenericString( int x, int y, const char *string, rgba_t setColor, qb
 		numDraws++;
 		s++;
 	}
-          
+
 	ref.dllFuncs.Color4ub( 255, 255, 255, 255 );
 	return drawLen;
 }
@@ -1077,8 +1101,8 @@ int Con_DrawString( int x, int y, const char *string, rgba_t setColor )
 
 void Con_LoadHistory( void )
 {
-	const char *aFile = FS_LoadFile( "console_history.txt", NULL, true );
-	const char *pLine = aFile, *pFile = aFile;
+	const byte *aFile = FS_LoadFile( "console_history.txt", NULL, true );
+	const char *pLine = (char *)aFile, *pFile = (char *)aFile;
 	int i;
 
 	if( !aFile )
@@ -1211,6 +1235,8 @@ void Con_Print( const char *txt )
 {
 	static int	cr_pending = 0;
 	static char	buf[MAX_PRINT_MSG];
+	qboolean		norefresh = false;
+	static int	lastlength = 0;
 	static qboolean	inupdate;
 	static int	bufpos = 0;
 	int		c, mask = 0;
@@ -1224,6 +1250,12 @@ void Con_Print( const char *txt )
 		// go to colored text
 		if( Con_FixedFont( ))
 			mask = 128;
+		txt++;
+	}
+
+	if( txt[0] == 3 )
+	{
+		norefresh = true;
 		txt++;
 	}
 
@@ -1242,33 +1274,57 @@ void Con_Print( const char *txt )
 		case '\0':
 			break;
 		case '\r':
-			Con_AddLine( buf, bufpos );
+			Con_AddLine( buf, bufpos, true );
+			lastlength = CON_LINES_LAST().length;
 			cr_pending = 1;
 			bufpos = 0;
 			break;
 		case '\n':
-			Con_AddLine( buf, bufpos );
+			Con_AddLine( buf, bufpos, true );
+			lastlength = CON_LINES_LAST().length;
 			bufpos = 0;
 			break;
 		default:
 			buf[bufpos++] = c | mask;
 			if(( bufpos >= sizeof( buf ) - 1 ) || bufpos >= ( con.linewidth - 1 ))
 			{
-				Con_AddLine( buf, bufpos );
+				Con_AddLine( buf, bufpos, true );
+				lastlength = CON_LINES_LAST().length;
 				bufpos = 0;
 			}
 			break;
 		}
 	}
 
-	if( cls.state != ca_disconnected && cls.state < ca_active && !cl.video_prepped && !cls.disable_screen )
+	if( norefresh ) return;
+
+	// custom renderer cause problems while updates screen on-loading
+	if( SV_Active() && cls.state < ca_active && !cl.video_prepped && !cls.disable_screen )
 	{
+		if( bufpos != 0 )
+		{
+			Con_AddLine( buf, bufpos, lastlength != 0 );
+			lastlength = 0;
+			bufpos = 0;
+		}
+
+		// pump messages to avoid window hanging
+		if( con.lastupdate < Sys_DoubleTime( ))
+		{
+			con.lastupdate = Sys_DoubleTime() + 1.0;
+			Host_InputFrame();
+		}
+
+		// FIXME: disable updating screen, because when texture is bound any console print
+		// can re-bound it to console font texture
+#if 0
 		if( !inupdate )
 		{
 			inupdate = true;
 			SCR_UpdateScreen ();
 			inupdate = false;
 		}
+#endif
 	}
 }
 
@@ -1279,7 +1335,7 @@ Con_NPrint
 Draw a single debug line with specified height
 ================
 */
-void Con_NPrintf( int idx, const char *fmt, ... )
+void GAME_EXPORT Con_NPrintf( int idx, const char *fmt, ... )
 {
 	va_list	args;
 
@@ -1306,7 +1362,7 @@ Con_NXPrint
 Draw a single debug line with specified height, color and time to live
 ================
 */
-void Con_NXPrintf( con_nprint_t *info, const char *fmt, ... )
+void GAME_EXPORT Con_NXPrintf( con_nprint_t *info, const char *fmt, ... )
 {
 	va_list	args;
 
@@ -1335,7 +1391,7 @@ UI_NPrint
 Draw a single debug line with specified height (menu version)
 ================
 */
-void UI_NPrintf( int idx, const char *fmt, ... )
+void GAME_EXPORT UI_NPrintf( int idx, const char *fmt, ... )
 {
 	va_list	args;
 
@@ -1362,7 +1418,7 @@ UI_NXPrint
 Draw a single debug line with specified height, color and time to live (menu version)
 ================
 */
-void UI_NXPrintf( con_nprint_t *info, const char *fmt, ... )
+void GAME_EXPORT UI_NXPrintf( con_nprint_t *info, const char *fmt, ... )
 {
 	va_list	args;
 
@@ -1835,8 +1891,8 @@ void Con_DrawInput( int lines )
 		return;
 
 	y = lines - ( con.curFont->charHeight * 2 );
-	Con_DrawCharacter( 8, y, ']', g_color_table[7] );
-	Field_DrawInputLine( 16, y, &con.input );
+	Con_DrawCharacter( con.curFont->charWidths[' '], y, ']', g_color_table[7] );
+	Field_DrawInputLine(  con.curFont->charWidths[' ']*2, y, &con.input );
 }
 
 /*
@@ -1976,7 +2032,7 @@ int Con_DrawConsoleLine( int y, int lineno )
 {
 	con_lineinfo_t	*li = &CON_LINES( lineno );
 
-	if( *li->start == '\1' )
+	if( !li || !li->start || *li->start == '\1' )
 		return 0;	// this string will be shown only at notify
 
 	if( y >= con.curFont->charHeight )
@@ -2034,6 +2090,8 @@ void Con_DrawSolidConsole( int lines )
 	// draw the background
 	ref.dllFuncs.GL_SetRenderMode( kRenderNormal );
 	ref.dllFuncs.Color4ub( 255, 255, 255, 255 ); // to prevent grab color from screenfade
+	if( refState.width * 3 / 4 < refState.height && lines >= refState.height )
+		ref.dllFuncs.R_DrawStretchPic( 0, lines - refState.height, refState.width, refState.height - refState.width * 3 / 4, 0, 0, 1, 1, R_GetBuiltinTexture( REF_BLACK_TEXTURE) );
 	ref.dllFuncs.R_DrawStretchPic( 0, lines - refState.width * 3 / 4, refState.width, refState.width * 3 / 4, 0, 0, 1, 1, con.background );
 
 	if( !con.curFont || !host.allow_console )
@@ -2087,7 +2145,7 @@ void Con_DrawSolidConsole( int lines )
 			y -= Con_DrawConsoleLine( y, x );
 
 			// top of console buffer or console window
-			if( x == 0 || y < con.curFont->charHeight ) 
+			if( x == 0 || y < con.curFont->charHeight )
 				break;
 			x--;
 		}
@@ -2311,10 +2369,11 @@ INTERNAL RESOURCE
 */
 void Con_VidInit( void )
 {
-	Con_CheckResize();
-
 	Con_LoadConchars();
-
+	Con_CheckResize();
+#if XASH_LOW_MEMORY
+	con.background = R_GetBuiltinTexture( REF_BLACK_TEXTURE );
+#else
 	// loading console image
 	if( host.allow_console )
 	{
@@ -2349,8 +2408,8 @@ void Con_VidInit( void )
 	if( !con.background ) // last chance - quake conback image
 	{
 		qboolean		draw_to_console = false;
-		int		length = 0;
-		byte *buf;
+		fs_offset_t		length = 0;
+		const byte *buf;
 
 		// NOTE: only these games want to draw build number into console background
 		if( !Q_stricmp( FS_Gamedir(), "id1" ))
@@ -2389,6 +2448,7 @@ void Con_VidInit( void )
 	// missed console image will be replaced as gray background like X-Ray or Crysis
 	if( con.background == R_GetBuiltinTexture( REF_DEFAULT_TEXTURE ) || con.background == 0 )
 		con.background = R_GetBuiltinTexture( REF_GRAY_TEXTURE );
+#endif
 }
 
 /*
@@ -2425,7 +2485,7 @@ Con_DefaultColor
 called from MainUI
 =========
 */
-void Con_DefaultColor( int r, int g, int b )
+void GAME_EXPORT Con_DefaultColor( int r, int g, int b )
 {
 	r = bound( 0, r, 255 );
 	g = bound( 0, g, 255 );

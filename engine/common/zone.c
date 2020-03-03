@@ -18,6 +18,15 @@ GNU General Public License for more details.
 #define MEMHEADER_SENTINEL1	0xDEADF00D
 #define MEMHEADER_SENTINEL2	0xDF
 
+#ifdef XASH_CUSTOM_SWAP
+#include "platform/swap/swap.h"
+#define Q_malloc SWAP_Malloc
+#define Q_free SWAP_Free
+#else
+#define Q_malloc malloc
+#define Q_free free
+#endif
+
 typedef struct memheader_s
 {
 	struct memheader_s	*next;		// next and previous memheaders in chain belonging to pool
@@ -58,7 +67,7 @@ void *_Mem_Alloc( byte *poolptr, size_t size, qboolean clear, const char *filena
 
 	// big allocations are not clumped
 	pool->realsize += sizeof( memheader_t ) + size + sizeof( int );
-	mem = (memheader_t *)malloc( sizeof( memheader_t ) + size + sizeof( int ));
+	mem = (memheader_t *)Q_malloc( sizeof( memheader_t ) + size + sizeof( int ));
 	if( mem == NULL ) Sys_Error( "Mem_Alloc: out of memory (alloc at %s:%i)\n", filename, fileline );
 
 	mem->filename = filename;
@@ -74,7 +83,8 @@ void *_Mem_Alloc( byte *poolptr, size_t size, qboolean clear, const char *filena
 	mem->prev = NULL;
 	pool->chain = mem;
 	if( mem->next ) mem->next->prev = mem;
-	if( clear ) memset((void *)((byte *)mem + sizeof( memheader_t )), 0, mem->size );
+	if( clear )
+		memset((void *)((byte *)mem + sizeof( memheader_t )), 0, mem->size );
 
 	return (void *)((byte *)mem + sizeof( memheader_t ));
 }
@@ -128,7 +138,7 @@ static void Mem_FreeBlock( memheader_t *mem, const char *filename, int fileline 
 	pool->totalsize -= mem->size;
 
 	pool->realsize -= sizeof( memheader_t ) + mem->size + sizeof( int );
-	free( mem );
+	Q_free( mem );
 }
 
 void _Mem_Free( void *data, const char *filename, int fileline )
@@ -166,7 +176,7 @@ byte *_Mem_AllocPool( const char *name, const char *filename, int fileline )
 {
 	mempool_t *pool;
 
-	pool = (mempool_t *)malloc( sizeof( mempool_t ));
+	pool = (mempool_t *)Q_malloc( sizeof( mempool_t ));
 	if( pool == NULL ) Sys_Error( "Mem_AllocPool: out of memory (allocpool at %s:%i)\n", filename, fileline );
 	memset( pool, 0, sizeof( mempool_t ));
 
@@ -189,7 +199,7 @@ void _Mem_FreePool( byte **poolptr, const char *filename, int fileline )
 {
 	mempool_t	*pool = (mempool_t *)*poolptr;
 	mempool_t	**chainaddress;
-          
+
 	if( pool )
 	{
 		// unlink pool from chain
@@ -203,7 +213,7 @@ void _Mem_FreePool( byte **poolptr, const char *filename, int fileline )
 		while( pool->chain ) Mem_FreeBlock( pool->chain, filename, fileline );
 		// free the pool itself
 		memset( pool, 0xBF, sizeof( mempool_t ));
-		free( pool );
+		Q_free( pool );
 		*poolptr = NULL;
 	}
 }
@@ -256,7 +266,7 @@ qboolean Mem_IsAllocatedExt( byte *poolptr, void *data )
 
 void Mem_CheckHeaderSentinels( void *data, const char *filename, int fileline )
 {
-	memheader_t *mem;
+	memheader_t	*mem;
 
 	if( data == NULL )
 		Sys_Error( "Mem_CheckSentinels: data == NULL (sentinel check at %s:%i)\n", filename, fileline );
@@ -269,7 +279,7 @@ void Mem_CheckHeaderSentinels( void *data, const char *filename, int fileline )
 		Sys_Error( "Mem_CheckSentinels: trashed header sentinel 1 (block allocated at %s:%i, sentinel check at %s:%i)\n", mem->filename, mem->fileline, filename, fileline );
 	}
 
-	if( *((byte *) mem + sizeof(memheader_t) + mem->size) != MEMHEADER_SENTINEL2 )
+	if( *((byte *)mem + sizeof(memheader_t) + mem->size) != MEMHEADER_SENTINEL2 )
 	{	
 		mem->filename = Mem_CheckFilename( mem->filename ); // make sure what we don't crash var_args
 		Sys_Error( "Mem_CheckSentinels: trashed header sentinel 2 (block allocated at %s:%i, sentinel check at %s:%i)\n", mem->filename, mem->fileline, filename, fileline );

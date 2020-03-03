@@ -107,6 +107,7 @@ static const loadpixformat_t load_game[] =
 { "%s%s.%s", "dds", Image_LoadDDS, IL_HINT_NO },	// dds for world and studio models
 { "%s%s.%s", "tga", Image_LoadTGA, IL_HINT_NO },	// hl vgui menus
 { "%s%s.%s", "bmp", Image_LoadBMP, IL_HINT_NO },	// WON menu images
+{ "%s%s.%s", "png", Image_LoadPNG, IL_HINT_NO },	// NightFire 007 menus
 { "%s%s.%s", "mip", Image_LoadMIP, IL_HINT_NO },	// hl textures from wad or buffer
 { "%s%s.%s", "mdl", Image_LoadMDL, IL_HINT_HL },	// hl studio model skins
 { "%s%s.%s", "spr", Image_LoadSPR, IL_HINT_HL },	// hl sprite frames
@@ -134,6 +135,7 @@ static const savepixformat_t save_game[] =
 {
 { "%s%s.%s", "tga", Image_SaveTGA },		// tga screenshots
 { "%s%s.%s", "bmp", Image_SaveBMP },		// bmp levelshots or screenshots
+{ "%s%s.%s", "png", Image_SavePNG },		// png screenshots
 { NULL, NULL, NULL }
 };
 
@@ -150,9 +152,14 @@ void Image_Init( void )
 		image.loadformats = load_game;
 		image.saveformats = save_game;
 		break;
-	default:	// all other instances not using imagelib
-		image.cmd_flags = 0;		
+	case HOST_DEDICATED:
+		image.cmd_flags = 0;
 		image.loadformats = load_game;
+		image.saveformats = save_null;
+		break;
+	default:	// all other instances not using imagelib
+		image.cmd_flags = 0;
+		image.loadformats = load_null;
 		image.saveformats = save_null;
 		break;
 	}
@@ -1239,7 +1246,7 @@ qboolean Image_Decompress( const byte *data )
 			else Image_GetPaletteLMP( image.palette, LUMP_MASKED ); 
 		}
 		else Image_GetPaletteLMP( image.palette, LUMP_NORMAL );
-		// intentional falltrough
+		// intentionally fallthrough
 	case PF_INDEXED_32:
 		if( !image.d_currentpal ) image.d_currentpal = (uint *)image.palette;
 		if( !Image_Copy8bitRGBA( fin, fout, image.width * image.height ))
@@ -1373,6 +1380,9 @@ static void Image_ApplyFilter( rgbdata_t *pic, float factor )
 	int	i, x, y; 
 	uint	*fin, *fout; 
 	size_t	size;
+
+	// don't waste time
+	if( factor <= 0.0f ) return;
 
 	// first expand the image into 32-bit buffer
 	pic = Image_DecompressInternal( pic );

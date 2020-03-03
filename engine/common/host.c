@@ -13,19 +13,20 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "build.h"
 #ifdef XASH_SDL
 #include <SDL.h>
 #endif // XASH_SDL
 #include <stdarg.h>  // va_args
 #include <errno.h> // errno
 #include <string.h> // strerror
-#ifndef _WIN32
+#if !XASH_WIN32
 #include <unistd.h> // fork
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #endif
-#ifdef __EMSCRIPTEN__
+#if XASH_EMSCRIPTEN
 #include <emscripten/emscripten.h>
 #endif
 #include <errno.h>
@@ -49,6 +50,8 @@ sysinfo_t		SI;
 
 CVAR_DEFINE( host_developer, "developer", "0", 0, "engine is in development-mode" );
 CVAR_DEFINE_AUTO( sys_ticrate, "100", 0, "framerate in dedicated mode" );
+
+convar_t	*host_serverstate;
 convar_t	*host_gameloaded;
 convar_t	*host_clientloaded;
 convar_t	*host_limitlocal;
@@ -111,7 +114,7 @@ qboolean Host_IsQuakeCompatible( void )
 	if( FBitSet( host.features, ENGINE_QUAKE_COMPATIBLE ))
 		return true;
 
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	// quake demo playing
 	if( cls.demoplayback == DEMO_QUAKE1 )
 		return true;
@@ -137,7 +140,7 @@ void Host_EndGame( qboolean abort, const char *message, ... )
 	Con_Printf( "Host_EndGame: %s\n", string );
 
 	SV_Shutdown( "\n" );	
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	CL_Disconnect();
 
 	// recreate world if needs
@@ -254,8 +257,9 @@ Host_Exec_f
 void Host_Exec_f( void )
 {
 	string	cfgpath;
-	char	*f, *txt; 
-	size_t	len;
+	byte *f;
+	char *txt;
+	fs_offset_t	len;
 
 	if( Cmd_Argc() != 2 )
 	{
@@ -448,7 +452,7 @@ double Host_CalcFPS( void )
 	{
 		fps = sys_ticrate.value;
 	}
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	else if( CL_IsPlaybackDemo() || CL_IsRecordDemo( )) // NOTE: we should play demos with same fps as it was recorded
 	{
 		fps = CL_GetDemoFramerate();
@@ -460,6 +464,7 @@ double Host_CalcFPS( void )
 	else
 	{
 		fps = host_maxfps->value;
+		if( fps == 0.0 ) fps = MAX_FPS;
 		fps = bound( MIN_FPS, fps, MAX_FPS );
 	}
 
@@ -552,7 +557,7 @@ void Host_Frame( float time )
 Host_Error
 =================
 */
-void Host_Error( const char *error, ... )
+void GAME_EXPORT Host_Error( const char *error, ... )
 {
 	static char	hosterror1[MAX_SYSPATH];
 	static char	hosterror2[MAX_SYSPATH];
@@ -649,7 +654,7 @@ Host_Crash_f
 */
 static void Host_Crash_f( void )
 {
-	*(int *)0 = 0xffffffff;
+	*(volatile int *)0 = 0xffffffff;
 }
 
 /*
@@ -660,7 +665,7 @@ Host_InitCommon
 void Host_InitCommon( int argc, char **argv, const char *progname, qboolean bChangeGame )
 {
 	char		dev_level[4];
-	int		developer = 0;
+	int		developer = DEFAULT_DEV;
 	const char *baseDir;
 	char ticrate[16];
 
@@ -672,53 +677,103 @@ void Host_InitCommon( int argc, char **argv, const char *progname, qboolean bCha
 	if( !Sys_CheckParm( "-noch" ) )
 		Sys_SetupCrashHandler();
 
-	// to be accessed later
-	if( ( host.daemonized = Sys_CheckParm( "-daemonize" ) ) )
+	host.enabledll = !Sys_CheckParm( "-nodll" );
+
+	host.change_game = bChangeGame;
+	host.config_executed = false;
+	host.status = HOST_INIT; // initialzation started
+
+	Memory_Init(); // init memory subsystem
+
+	host.mempool = Mem_AllocPool( "Zone Engine" );
+
+	// HACKHACK: Quake console is always allowed
+	// TODO: determine if we are running QWrap more reliable
+	if( Sys_CheckParm( "-console" ) || !Q_stricmp( SI.exeName, "quake" ))
+		host.allow_console = true;
+
+	if( Sys_CheckParm( "-dev" ))
 	{
-#if defined(_POSIX_VERSION) && !defined(XASH_MOBILE_PLATFORM)
-		pid_t daemon;
+		host.allow_console = true;
+		developer = DEV_NORMAL;
 
-		daemon = fork();
-
-		if( daemon < 0 )
+		if( Sys_GetParmFromCmdLine( "-dev", dev_level ))
 		{
-			Host_Error( "fork() failed: %s\n", strerror( errno ) );
+			if( Q_isdigit( dev_level ))
+				developer = bound( DEV_NONE, abs( Q_atoi( dev_level )), DEV_EXTENDED );
 		}
-
-		if( daemon > 0 )
-		{
-			// parent
-			Con_Reportf( "Child pid: %i\n", daemon );
-			exit( 0 );
-		}
-		else
-		{
-			// don't be closed by parent
-			if( setsid() < 0 )
-			{
-				Host_Error( "setsid() failed: %s\n", strerror( errno ) );
-			}
-
-			// set permissions
-			umask( 0 );
-
-			// engine will still use stdin/stdout,
-			// so just redirect them to /dev/null
-			close( STDIN_FILENO );
-			close( STDOUT_FILENO );
-			close( STDERR_FILENO );
-			open("/dev/null", O_RDONLY); // becomes stdin
-			open("/dev/null", O_RDWR); // stdout
-			open("/dev/null", O_RDWR); // stderr
-
-			// fallthrough
-		}
-#elif defined(XASH_MOBILE_PLATFORM)
-		Sys_Error( "Can't run in background on mobile platforms!" );
-#else
-		Sys_Error( "Daemonize not supported on this platform!" );
-#endif
 	}
+
+	host.con_showalways = true;
+
+#if XASH_DEDICATED
+	host.type = HOST_DEDICATED; // predict state
+#else
+	if( Sys_CheckParm("-dedicated") || progname[0] == '#' )
+	{
+		host.type = HOST_DEDICATED;
+	}
+	else
+	{
+		host.type = HOST_NORMAL;
+	}
+#endif
+
+	// set default gamedir
+	if( progname[0] == '#' )
+		progname++;
+
+	Q_strncpy( SI.exeName, progname, sizeof( SI.exeName ));
+	Q_strncpy( SI.basedirName, progname, sizeof( SI.exeName ));
+
+	if( Host_IsDedicated() )
+	{
+		Sys_MergeCommandLine( );
+
+		host.allow_console = true;
+	}
+	else
+	{
+		// don't show console as default
+		if( developer <= DEV_NORMAL )
+			host.con_showalways = false;
+	}
+
+	// member console allowing
+	host.allow_console_init = host.allow_console;
+
+	// timeBeginPeriod( 1 ); // a1ba: Do we need this?
+
+	// NOTE: this message couldn't be passed into game console but it doesn't matter
+//	Con_Reportf( "Sys_LoadLibrary: Loading xash.dll - ok\n" );
+
+	// get default screen res
+	VID_InitDefaultResolution();
+
+	// init host state machine
+	COM_InitHostState();
+
+	// init hashed commands
+	BaseCmd_Init();
+
+	// startup cmds and cvars subsystem
+	Cmd_Init();
+	Cvar_Init();
+
+	// share developer level across all dlls
+	Q_snprintf( dev_level, sizeof( dev_level ), "%i", developer );
+	Cvar_DirectSet( &host_developer, dev_level );
+	Cvar_RegisterVariable( &sys_ticrate );
+
+	if( Sys_GetParmFromCmdLine( "-sys_ticrate", ticrate ))
+	{
+		double fps = bound( MIN_FPS, atof( ticrate ), MAX_FPS );
+		Cvar_SetValue( "sys_ticrate", fps );
+	}
+
+	Con_Init(); // early console running to catch all the messages
+
+	Platform_Init();
 
 	if( ( baseDir = getenv( "XASH3D_BASEDIR" ) ) )
 	{
@@ -729,7 +784,7 @@ void Host_InitCommon( int argc, char **argv, const char *progname, qboolean bCha
 #if TARGET_OS_IOS
 		const char *IOS_GetDocsDir();
 		Q_strncpy( host.rootdir, IOS_GetDocsDir(), sizeof(host.rootdir) );
-#elif defined(XASH_SDL)
+#elif XASH_SDL == 2
 		char *szBasePath;
 
 		if( !( szBasePath = SDL_GetBasePath() ) )
@@ -762,67 +817,6 @@ void Host_InitCommon( int argc, char **argv, const char *progname, qboolean bCha
 	if( host.rodir[0] && host.rodir[Q_strlen( host.rodir ) - 1] == '/' )
 		host.rodir[Q_strlen( host.rodir ) - 1] = 0;
 
-	host.enabledll = !Sys_CheckParm( "-nodll" );
-
-#ifdef DLL_LOADER
-	if( host.enabledll )
-		Setup_LDT_Keeper( ); // Must call before creating any thread
-#endif
-
-	host.change_game = bChangeGame;
-	host.config_executed = false;
-	host.status = HOST_INIT; // initialzation started
-
-	Memory_Init(); // init memory subsystem
-
-	host.mempool = Mem_AllocPool( "Zone Engine" );
-
-	// HACKHACK: Quake console is always allowed
-	// TODO: determine if we are running QWrap more reliable
-	if( Sys_CheckParm( "-console" ) || !Q_stricmp( SI.exeName, "quake" ))
-		host.allow_console = true;
-
-	if( Sys_CheckParm( "-dev" ))
-	{
-		host.allow_console = true;
-		developer = DEV_NORMAL;
-
-		if( Sys_GetParmFromCmdLine( "-dev", dev_level ))
-		{
-			if( Q_isdigit( dev_level ))
-				developer = bound( DEV_NONE, abs( Q_atoi( dev_level )), DEV_EXTENDED );
-		}
-	}
-
-	host.con_showalways = true;
-
-#ifdef XASH_DEDICATED
-	host.type = HOST_DEDICATED; // predict state
-#else
-	if( Sys_CheckParm("-dedicated") || progname[0] == '#' )
-	{
-		host.type = HOST_DEDICATED;
-	}
-	else
-	{
-		host.type = HOST_NORMAL;
-	}
-#endif
-
-#ifdef XASH_SDL
-	// should work even if it failed
-	SDL_Init( SDL_INIT_TIMER );
-
-	if( SDL_Init( SDL_INIT_VIDEO | SDL_INIT_EVENTS ) )
-	{
-		Sys_Warn( "SDL_Init failed: %s", SDL_GetError() );
-		host.type = HOST_DEDICATED;
-	}
-	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
-
-	SDL_StopTextInput();
-#endif
-
 	if ( !host.rootdir[0] || SetCurrentDirectory( host.rootdir ) != 0)
 		Con_Reportf( "%s is working directory now\n", host.rootdir );
 	else
@@ -830,62 +824,6 @@ void Host_InitCommon( int argc, char **argv, const char *progname, qboolean bCha
 
 	Sys_InitLog();
 
-	// set default gamedir
-	if( progname[0] == '#' )
-		progname++;
-
-	Q_strncpy( SI.exeName, progname, sizeof( SI.exeName ));
-	Q_strncpy( SI.basedirName, progname, sizeof( SI.exeName ));
-
-	if( Host_IsDedicated() )
-	{
-		Sys_MergeCommandLine( );
-
-		host.allow_console = true;
-	}
-	else
-	{
-		// don't show console as default
-		if( developer <= DEV_NORMAL )
-			host.con_showalways = false;
-	}
-
-	// member console allowing
-	host.allow_console_init = host.allow_console;
-
-#ifdef _WIN32
-	Wcon_CreateConsole(); // system console used by dedicated server or show fatal errors
-#endif
-	// timeBeginPeriod( 1 ); // a1ba: Do we need this?
-
-	// NOTE: this message couldn't be passed into game console but it doesn't matter
-	Con_Reportf( "Sys_LoadLibrary: Loading xash.dll - ok\n" );
-
-	// get default screen res
-	VID_InitDefaultResolution();
-
-	// init host state machine
-	COM_InitHostState();
-
-	// init hashed commands
-	BaseCmd_Init();
-
-	// startup cmds and cvars subsystem
-	Cmd_Init();
-	Cvar_Init();
-
-	// share developer level across all dlls
-	Q_snprintf( dev_level, sizeof( dev_level ), "%i", developer );
-	Cvar_DirectSet( &host_developer, dev_level );
-	Cvar_RegisterVariable( &sys_ticrate );
-
-	if( Sys_GetParmFromCmdLine( "-sys_ticrate", ticrate ))
-	{
-		double fps = bound( MIN_FPS, atof( ticrate ), MAX_FPS );
-		Cvar_SetValue( "sys_ticrate", fps );
-	}
-
-	Con_Init(); // early console running to catch all the messages
 	Cmd_AddCommand( "exec", Host_Exec_f, "execute a script file" );
 	Cmd_AddCommand( "memlist", Host_MemStats_f, "prints memory pool information" );
 
@@ -943,6 +881,7 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 		Cmd_AddCommand ( "crash", Host_Crash_f, "a way to force a bus error for development reasons");
 	}
 
+	host_serverstate = Cvar_Get( "host_serverstate", "0", FCVAR_READ_ONLY, "displays current server state" );
 	host_maxfps = Cvar_Get( "fps_max", "72", FCVAR_ARCHIVE, "host fps upper limit" );
 	host_framerate = Cvar_Get( "host_framerate", "0", 0, "locks frame timing to this value in seconds" );  
 	host_sleeptime = Cvar_Get( "sleeptime", "1", FCVAR_ARCHIVE, "milliseconds to sleep for each frame. higher values reduce fps accuracy" );
@@ -951,10 +890,8 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	host_limitlocal = Cvar_Get( "host_limitlocal", "0", 0, "apply cl_cmdrate and rate to loopback connection" );
 	con_gamemaps = Cvar_Get( "con_mapfilter", "1", FCVAR_ARCHIVE, "when true show only maps in game folder" );
 
-	build = Cvar_Get( "buildnum", va( "%i", Q_buildnum()), FCVAR_READ_ONLY, "returns a current build number" );
-
-	ver = Cvar_Get( "ver", va( "%i/%s (hw build %i)", PROTOCOL_VERSION, XASH_VERSION, Q_buildnum()), FCVAR_READ_ONLY, "shows an engine version" );
-
+	build = Cvar_Get( "buildnum", va( "%i", Q_buildnum_compat()), FCVAR_READ_ONLY, "returns a current build number" );
+	ver = Cvar_Get( "ver", va( "%i/%s (hw build %i)", PROTOCOL_VERSION, XASH_COMPAT_VERSION, Q_buildnum_compat()), FCVAR_READ_ONLY, "shows an engine version" );
 	Cvar_Get( "host_ver", va( "%i %s %s %s %s", Q_buildnum(), XASH_VERSION, Q_buildos(), Q_buildarch(), Q_buildcommit() ), FCVAR_READ_ONLY, "detailed info about this build" );
 
 	Mod_Init();
@@ -1049,21 +986,20 @@ void EXPORT Host_Shutdown( void )
 	if( host.status != HOST_ERR_FATAL ) host.status = HOST_SHUTDOWN; // prepare host to normal shutdown
 	if( !host.change_game ) Q_strncpy( host.finalmsg, "Server shutdown", sizeof( host.finalmsg ));
 
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	if( host.type == HOST_NORMAL )
 		Host_WriteConfig();
 #endif
 
 	SV_Shutdown( "Server shutdown\n" );
+	SV_ShutdownFilter();
 	CL_Shutdown();
 
 	Mod_Shutdown();
 	NET_Shutdown();
 	HTTP_Shutdown();
 	Host_FreeCommon();
-#ifdef _WIN32
-	Wcon_DestroyConsole();
-#endif
+	Platform_Shutdown();
 
 	// must be last, console uses this
 	Mem_FreePool( &host.mempool );

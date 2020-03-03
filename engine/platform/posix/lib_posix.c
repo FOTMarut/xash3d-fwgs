@@ -12,9 +12,10 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
-
-#ifndef _WIN32 // see win_lib.c
 #define _GNU_SOURCE
+#include "platform/platform.h"
+#if XASH_LIB == LIB_POSIX
+
 
 #include "common.h"
 #include "library.h"
@@ -23,6 +24,16 @@ GNU General Public License for more details.
 #include "platform/android/lib_android.h"
 #include "platform/emscripten/lib_em.h"
 #include "platform/apple/lib_ios.h"
+
+#ifdef XASH_DLL_LOADER // wine-based dll loader
+void * Loader_LoadLibrary (const char *name);
+void * Loader_GetProcAddress (void *hndl, const char *name);
+void Loader_FreeLibrary(void *hndl);
+void *Loader_GetDllHandle( void *hndl );
+const char * Loader_GetFuncName( void *hndl, void *func);
+const char * Loader_GetFuncName_int( void *wm , void *func);
+#endif
+
 
 #ifdef XASH_NO_LIBDL
 #ifndef XASH_DLL_LOADER
@@ -58,6 +69,12 @@ int dladdr( const void *addr, Dl_info *info )
 }
 #endif // XASH_NO_LIBDL
 
+qboolean COM_CheckLibraryDirectDependency( const char *name, const char *depname, qboolean directpath )
+{
+	// TODO: implement
+	return true;
+}
+
 void *COM_LoadLibrary( const char *dllname, int build_ordinals_table, qboolean directpath )
 {
 	dll_user_t *hInst = NULL;
@@ -66,21 +83,17 @@ void *COM_LoadLibrary( const char *dllname, int build_ordinals_table, qboolean d
 	COM_ResetLibraryError();
 
 	// platforms where gameinfo mechanism is impossible
-#if TARGET_OS_IPHONE
-	return IOS_LoadLibrary( dllname );
-#elif defined( __EMSCRIPTEN__ )
-	return EMSCRIPTEN_LoadLibrary( dllname );
-#elif defined( __ANDROID__ )
-	return ANDROID_LoadLibrary( dllname );
+#ifdef Platform_POSIX_LoadLibrary
+	return Platform_POSIX_LoadLibrary( dllname );
 #endif
 
 	// platforms where gameinfo mechanism is working goes here
 	// and use FS_FindLibrary
-	hInst = FS_FindLibrary( dllname, false );
+	hInst = FS_FindLibrary( dllname, directpath );
 	if( !hInst )
 	{
 		// HACKHACK: direct load dll
-#ifdef DLL_LOADER
+#ifdef XASH_DLL_LOADER
 		if( host.enabledll && ( pHandle = Loader_LoadLibrary(dllname)) )
 		{
 			return pHandle;
@@ -107,8 +120,8 @@ void *COM_LoadLibrary( const char *dllname, int build_ordinals_table, qboolean d
 		return NULL;
 	}
 
-#ifdef DLL_LOADER
-	if( host.enabledll && ( !Q_stricmp( FS_FileExtension( hInst->shortPath ), "dll" ) ) )
+#ifdef XASH_DLL_LOADER
+	if( host.enabledll && ( !Q_stricmp( COM_FileExtension( hInst->shortPath ), "dll" ) ) )
 	{
 		if( hInst->encrypted )
 		{
@@ -144,27 +157,31 @@ void *COM_LoadLibrary( const char *dllname, int build_ordinals_table, qboolean d
 
 void COM_FreeLibrary( void *hInstance )
 {
-#ifdef DLL_LOADER
+#ifdef XASH_DLL_LOADER
 	void *wm;
 	if( host.enabledll && (wm = Loader_GetDllHandle( hInstance )) )
 		return Loader_FreeLibrary( hInstance );
 	else
 #endif
-#if !defined __EMSCRIPTEN__ || defined EMSCRIPTEN_LIB_FS
-	dlclose( hInstance );
+	{
+#ifdef Platform_POSIX_FreeLibrary
+		Platform_POSIX_FreeLibrary( hInstance );
+#else
+		dlclose( hInstance );
 #endif
+	}
 }
 
 void *COM_GetProcAddress( void *hInstance, const char *name )
 {
-#ifdef DLL_LOADER
+#ifdef XASH_DLL_LOADER
 	void *wm;
 	if( host.enabledll && (wm = Loader_GetDllHandle( hInstance )) )
 		return Loader_GetProcAddress(hInstance, name);
 	else
 #endif
-#if defined(__ANDROID__)
-	return ANDROID_GetProcAddress( hInstance, name );
+#if Platform_POSIX_GetProcAddress
+	return Platform_POSIX_GetProcAddress( hInstance, name );
 #else
 	return dlsym( hInstance, name );
 #endif
@@ -199,7 +216,7 @@ int d_dladdr( void *sym, Dl_info *info )
 
 const char *COM_NameForFunction( void *hInstance, void *function )
 {
-#ifdef DLL_LOADER
+#ifdef XASH_DLL_LOADER
 	void *wm;
 	if( host.enabledll && (wm = Loader_GetDllHandle( hInstance )) )
 		return Loader_GetFuncName_int(wm, function);

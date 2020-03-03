@@ -16,10 +16,8 @@ GNU General Public License for more details.
 #ifndef COM_MODEL_H
 #define COM_MODEL_H
 
+#include "xash3d_types.h"
 #include "bspfile.h"	// we need some declarations from it
-
-typedef vec_t		vec2_t[2];
-typedef vec_t		vec4_t[4];
 
 /*
 ==============================================================================
@@ -108,6 +106,15 @@ typedef struct
 
 	int		reserved[32];	// just for future expansions or mod-makers
 } mfaceinfo_t;
+
+typedef struct
+{
+	mplane_t		*edges;
+	int		numedges;
+	vec3_t		origin;
+	vec_t		radius;		// for culling tests
+	int		contents;		// sky or solid
+} mfacebevel_t;
 
 typedef struct
 {
@@ -208,7 +215,7 @@ typedef struct mextrasurf_s
 // begin userdata
 	struct msurface_s	*lightmapchain;	// lightmapped polys
 	struct mextrasurf_s	*detailchain;	// for detail textures drawing
-	struct mextrasurf_s	*mirrorchain;	// for gl_texsort drawing
+	mfacebevel_t	*bevel;		// for exact face traceline
 	struct mextrasurf_s	*lumachain;	// draw fullbrights
 	struct cl_entity_s	*parent;		// upcast to owner entity
 
@@ -223,7 +230,7 @@ typedef struct mextrasurf_s
 	int		reserved[32];	// just for future expansions or mod-makers
 } mextrasurf_t;
 
-typedef struct msurface_s
+struct msurface_s
 {
 	int		visframe;		// should be drawn when node is crossed
 
@@ -255,7 +262,7 @@ typedef struct msurface_s
 
 	color24		*samples;		// note: this is the actual lightmap data for this surface
 	decal_t		*pdecals;
-} msurface_t;
+};
 
 typedef struct hull_s
 {

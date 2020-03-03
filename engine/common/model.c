@@ -85,7 +85,7 @@ static void Mod_FreeUserData( model_t *mod )
 			svgame.physFuncs.Mod_ProcessUserData( mod, false, NULL );
 		}
 	}
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	else
 	{
 		ref.dllFuncs.Mod_ProcessRenderData( mod, false, NULL );
@@ -110,6 +110,12 @@ void Mod_FreeModel( model_t *mod )
 		Mem_FreePool( &mod->mempool );
 	}
 
+	if( mod->type == mod_brush && FBitSet( mod->flags, MODEL_WORLD ) )
+	{
+		world.shadowdata = NULL;
+		world.deluxedata = NULL;
+	}
+
 	memset( mod, 0, sizeof( *mod ));
 }
 
@@ -119,6 +125,11 @@ void Mod_FreeModel( model_t *mod )
 			MODEL INITIALIZE\SHUTDOWN
 
 ===============================================================================
+*/
+/*
+================
+Mod_Init
+================
 */
 void Mod_Init( void )
 {
@@ -143,7 +154,7 @@ void Mod_FreeAll( void )
 {
 	int	i;
 
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	Mod_ReleaseHullPolygons();
 #endif
 	for( i = 0; i < mod_numknown; i++ )
@@ -241,7 +252,7 @@ Loads a model into the cache
 model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 {
 	char		tempname[MAX_QPATH];
-	long		length = 0;
+	fs_offset_t		length = 0;
 	qboolean		loaded;
 	byte		*buf;
 	model_info_t	*p;
@@ -316,7 +327,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 				svgame.physFuncs.Mod_ProcessUserData( mod, true, buf );
 			}
 		}
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 		else
 		{
 			loaded = ref.dllFuncs.Mod_ProcessRenderData( mod, true, buf );
@@ -393,7 +404,7 @@ static void Mod_PurgeStudioCache( void )
 
 	// refresh hull data
 	SetBits( r_showhull->flags, FCVAR_CHANGED );
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	Mod_ReleaseHullPolygons();
 #endif
 	// release previois map
@@ -507,7 +518,7 @@ Mod_LoadCacheFile
 void Mod_LoadCacheFile( const char *filename, cache_user_t *cu )
 {
 	char	modname[MAX_QPATH];
-	size_t	size;
+	fs_offset_t	size;
 	byte	*buf;
 
 	Assert( cu != NULL );

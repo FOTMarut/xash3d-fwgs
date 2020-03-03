@@ -55,7 +55,7 @@ static aliashdr_t	*m_pAliasHeader;
 static trivertex_t	*g_poseverts[MAXALIASFRAMES];
 static dtriangle_t	g_triangles[MAXALIASTRIS];
 static stvert_t	g_stverts[MAXALIASVERTS];
-static qboolean	g_used[8192];
+static int	g_used[8192];
 
 // a pose is a single set of vertexes. a frame may be
 // an animating sequence of poses
@@ -227,7 +227,7 @@ for the model, which holds for all frames
 */
 void BuildTris( void )
 {
-	int	len, bestlen, besttype;
+	int	len, bestlen, besttype = 0;
 	int	bestverts[1024];
 	int	besttris[1024];
 	int	type, startv;
@@ -1005,11 +1005,11 @@ R_AliasSetRemapColors
 */
 void R_AliasSetRemapColors( int newTop, int newBottom )
 {
-	gEngfuncs.CL_AllocRemapInfo( newTop, newBottom );
+	gEngfuncs.CL_AllocRemapInfo( RI.currententity, newTop, newBottom );
 
 	if( gEngfuncs.CL_GetRemapInfoForEntity( RI.currententity ))
 	{
-		gEngfuncs.CL_UpdateRemapInfo( newTop, newBottom );
+		gEngfuncs.CL_UpdateRemapInfo( RI.currententity, newTop, newBottom );
 		m_fDoRemap = true;
 	}
 }
@@ -1047,7 +1047,7 @@ void GL_DrawAliasFrame( aliashdr_t *paliashdr )
 		else
 		{
 			pglBegin( GL_TRIANGLE_STRIP );
-                    }
+		}
 
 		do
 		{

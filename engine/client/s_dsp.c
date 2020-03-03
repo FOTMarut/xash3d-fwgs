@@ -61,7 +61,7 @@ typedef struct dly_s
 	size_t	idelayoutput;
 
 	// crossfade
-	size_t	idelayoutputxf;	// output pointer
+	int	idelayoutputxf;	// output pointer
 	int	xfade;		// value
 
 	int	delaysamples;	// delay setting
@@ -415,7 +415,7 @@ void DLY_DoStereoDelay( int count )
 		{
 			// clear delay line
 			dly->lpdelayline[dly->idelayinput] = 0;
-                    }
+		}
 
 		DLY_MovePointer( dly );
 	}
@@ -853,18 +853,6 @@ void CheckNewDspPresets( void )
 	RVB_CheckNewReverbVal( );
 	DLY_CheckNewDelayVal( );
 	DLY_CheckNewStereoDelayVal();
-}
-
-/*
-===========
-DSP_GetGain
-
-(xash dsp interface)
-===========
-*/
-float DSP_GetGain( int idsp )
-{
-	return 1.0f;
 }
 
 void SX_Profiling_f( void )

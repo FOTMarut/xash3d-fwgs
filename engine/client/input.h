@@ -41,6 +41,12 @@ void IN_MouseRestorePos( void );
 void IN_ToggleClientMouse( int newstate, int oldstate );
 void IN_SetCursor( void *hCursor );
 
+uint IN_CollectInputDevices( void );
+void IN_LockInputDevices( qboolean lock );
+void IN_EngineAppendMove( float frametime, void *cmd, qboolean active );
+
+extern convar_t *m_yaw;
+extern convar_t *m_pitch;
 //
 // in_touch.c
 //
@@ -52,25 +58,24 @@ typedef enum
 } touchEventType;
 
 extern convar_t *touch_enable;
+extern convar_t *touch_emulate;
 
-void IN_TouchDraw( void );
-void IN_TouchEditClear( void );
-void IN_TouchSetClientOnly( qboolean state );
-void IN_TouchRemoveButton( const char *name );
-void IN_TouchHideButtons( const char *name, qboolean hide );
+void Touch_Draw( void );
+void Touch_SetClientOnly( qboolean state );
+void Touch_RemoveButton( const char *name );
+void Touch_HideButtons( const char *name, unsigned char hide );
 //void IN_TouchSetCommand( const char *name, const char *command );
 //void IN_TouchSetTexture( const char *name, const char *texture );
 //void IN_TouchSetColor( const char *name, byte *color );
-void IN_TouchAddClientButton( const char *name, const char *texture, const char *command, float x1, float y1, float x2, float y2, byte *color, int round, float aspect, int flags );
-void IN_TouchAddDefaultButton( const char *name, const char *texturefile, const char *command, float x1, float y1, float x2, float y2, byte *color, int round, float aspect, int flags );
-void IN_TouchInitConfig( void );
-void IN_TouchWriteConfig( void );
-void IN_TouchInit( void );
-void IN_TouchShutdown( void );
-void IN_TouchMove( float * forward, float *side, float *yaw, float *pitch );
-void IN_TouchResetDefaultButtons( void );
+void Touch_AddClientButton( const char *name, const char *texture, const char *command, float x1, float y1, float x2, float y2, byte *color, int round, float aspect, int flags );
+void Touch_AddDefaultButton( const char *name, const char *texturefile, const char *command, float x1, float y1, float x2, float y2, byte *color, int round, float aspect, int flags );
+void Touch_WriteConfig( void );
+void Touch_Init( void );
+void Touch_Shutdown( void );
+void Touch_GetMove( float * forward, float *side, float *yaw, float *pitch );
+void Touch_ResetDefaultButtons( void );
 int IN_TouchEvent( touchEventType type, int fingerID, float x, float y, float dx, float dy );
-void IN_TouchKeyEvent( int key, int down );
+void Touch_KeyEvent( int key, int down );
 
 //
 // in_joy.c
@@ -89,24 +94,16 @@ enum
 };
 
 qboolean Joy_IsActive( void );
-void Joy_HatMotionEvent( int id, byte hat, byte value );
-void Joy_AxisMotionEvent( int id, byte axis, short value );
-void Joy_BallMotionEvent( int id, byte ball, short xrel, short yrel );
-void Joy_ButtonEvent( int id, byte button, byte down );
-void Joy_AddEvent( int id );
-void Joy_RemoveEvent( int id );
+void Joy_HatMotionEvent( byte hat, byte value );
+void Joy_AxisMotionEvent( byte axis, short value );
+void Joy_BallMotionEvent( byte ball, short xrel, short yrel );
+void Joy_ButtonEvent( byte button, byte down );
+void Joy_AddEvent( void );
+void Joy_RemoveEvent( void );
 void Joy_FinalizeMove( float *fw, float *side, float *dpitch, float *dyaw );
 void Joy_Init( void );
 void Joy_Shutdown( void );
 void Joy_EnableTextInput(qboolean enable, qboolean force);
 
-//
-// in_evdev.c
-//
-#ifdef XASH_USE_EVDEV
-void Evdev_SetGrab( qboolean grab );
-void Evdev_Shutdown( void );
-void Evdev_Init( void );
-#endif // XASH_USE_EVDEV
 
 #endif//INPUT_H

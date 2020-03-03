@@ -85,7 +85,7 @@ static void FindNextChunk( const char *name )
 		iff_dataPtr -= 8;
 		iff_lastChunk = iff_dataPtr + 8 + ((iff_chunkLen + 1) & ~1);
 
-		if( !Q_strncmp( iff_dataPtr, name, 4 ))
+		if( !Q_strncmp( (const char *)iff_dataPtr, name, 4 ))
 			return;
 	}
 }
@@ -139,7 +139,7 @@ qboolean StreamFindNextChunk( file_t *file, const char *name, int *last_chunk )
 Sound_LoadWAV
 =============
 */
-qboolean Sound_LoadWAV( const char *name, const byte *buffer, size_t filesize )
+qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	int	samples, fmt;
 	qboolean	mpeg_stream = false;
@@ -153,7 +153,7 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, size_t filesize )
 	// find "RIFF" chunk
 	FindChunk( "RIFF" );
 
-	if( !( iff_dataPtr && !Q_strncmp( iff_dataPtr + 8, "WAVE", 4 )))
+	if( !( iff_dataPtr && !Q_strncmp( (const char *)iff_dataPtr + 8, "WAVE", 4 )))
 	{
 		Con_DPrintf( S_ERROR "Sound_LoadWAV: %s missing 'RIFF/WAVE' chunks\n", name );
 		return false;
@@ -216,7 +216,7 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, size_t filesize )
 
 		if( iff_dataPtr )
 		{
-			if( !Q_strncmp( iff_dataPtr + 28, "mark", 4 ))
+			if( !Q_strncmp( (const char *)iff_dataPtr + 28, "mark", 4 ))
 			{	
 				// this is not a proper parse, but it works with CoolEdit...
 				iff_dataPtr += 24;
@@ -254,7 +254,7 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, size_t filesize )
 
 	if( sound.samples <= 0 )
 	{
-		Con_DPrintf( S_ERROR "Sound_LoadWAV: file with %i samples (%s)\n", sound.samples, name );
+		Con_Reportf( S_ERROR "Sound_LoadWAV: file with %i samples (%s)\n", sound.samples, name );
 		return false;
 	}
 
@@ -287,7 +287,7 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, size_t filesize )
 	if( sound.width == 1 )
 	{
 		int	i, j;
-		char	*pData = sound.wav;
+		signed char	*pData = (signed char *)sound.wav;
 
 		for( i = 0; i < sound.samples; i++ )
 		{

@@ -185,13 +185,13 @@ static void SubdividePolygon_r( msurface_t *warpface, int numverts, float *verts
 			s = DotProduct( verts, warpinfo->lmvecs[0] ) + warpinfo->lmvecs[0][3];
 			s -= warpinfo->lightmapmins[0];
 			s += warpface->light_s * sample_size;
-			s += sample_size * 0.5;
+			s += sample_size * 0.5f;
 			s /= BLOCK_SIZE * sample_size; //fa->texinfo->texture->width;
 
 			t = DotProduct( verts, warpinfo->lmvecs[1] ) + warpinfo->lmvecs[1][3];
 			t -= warpinfo->lightmapmins[1];
 			t += warpface->light_t * sample_size;
-			t += sample_size * 0.5;
+			t += sample_size * 0.5f;
 			t /= BLOCK_SIZE * sample_size; //fa->texinfo->texture->height;
 
 			poly->verts[i][5] = s;
@@ -205,7 +205,7 @@ void GL_SetupFogColorForSurfaces( void )
 	vec3_t	fogColor;
 	float	factor, div;
 
-	if( !pglIsEnabled( GL_FOG ))
+	if( !glState.isFogEnabled)
 		return;
 
 	if( RI.currententity && RI.currententity->curstate.rendermode == kRenderTransTexture )
@@ -225,7 +225,7 @@ void GL_SetupFogColorForSurfaces( void )
 void GL_ResetFogColor( void )
 {
 	// restore fog here
-	if( pglIsEnabled( GL_FOG ))
+	if( glState.isFogEnabled )
 		pglFogfv( GL_FOG_COLOR, RI.fogColor );
 }
 
@@ -653,7 +653,7 @@ static int LM_AllocBlock( int w, int h, int *x, int *y )
 	return true;
 }
 
-static void LM_UploadDynamicBlock()
+static void LM_UploadDynamicBlock( void )
 {
 	int	height = 0, i;
 
@@ -805,10 +805,10 @@ void DrawGLPoly( glpoly_t *p, float xScale, float yScale )
 		}
 		texture = R_GetTexture( glState.currentTextures[glState.activeTMU] );
 
-		flRate = abs( flConveyorSpeed ) / (float)texture->srcWidth;
+		flRate = fabs( flConveyorSpeed ) / (float)texture->srcWidth;
 		flAngle = ( flConveyorSpeed >= 0 ) ? 180 : 0;
 
-		SinCos( flAngle * ( M_PI / 180.0f ), &sy, &cy );
+		SinCos( flAngle * ( M_PI_F / 180.0f ), &sy, &cy );
 		sOffset = gpGlobals->time * cy * flRate;
 		tOffset = gpGlobals->time * sy * flRate;
 	
@@ -1103,7 +1103,7 @@ void R_RenderDetails( void )
 			fa = p->surf;
 			glt = R_GetTexture( fa->texinfo->texture->gl_texturenum ); // get texture scale
 			DrawGLPoly( fa->polys, glt->xscale, glt->yscale );
-                    }
+		}
 
 		detail_surfaces[i] = NULL;
 		es->detailchain = NULL;		
@@ -1155,7 +1155,7 @@ void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 
 	if( CVAR_TO_BOOL( r_detailtextures ))
 	{
-		if( pglIsEnabled( GL_FOG ))
+		if( glState.isFogEnabled )
 		{
 			// don't apply detail textures for windows in the fog
 			if( RI.currententity->curstate.rendermode != kRenderTransTexture )
@@ -1207,7 +1207,7 @@ void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 	}
 
 	// dynamic this frame or dynamic previously
-	if(( fa->dlightframe == tr.framecount ))
+	if( fa->dlightframe == tr.framecount )
 	{
 dynamic:
 		// NOTE: at this point we have only valid textures
@@ -1229,7 +1229,7 @@ dynamic:
 
 			R_BuildLightMap( fa, temp, smax * 4, true );
 			R_SetCacheState( fa );
-                              
+
 			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[fa->lightmaptexturenum] );
 
 			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax,
@@ -1435,14 +1435,14 @@ R_SurfaceCompare
 compare translucent surfaces
 =================
 */
-static int R_SurfaceCompare( const sortedface_t *a, const sortedface_t *b )
+static int R_SurfaceCompare( const void *a, const void *b )
 {
 	msurface_t	*surf1, *surf2;
 	vec3_t		org1, org2;
 	float		len1, len2;
 
-	surf1 = (msurface_t *)a->surf;
-	surf2 = (msurface_t *)b->surf;
+	surf1 = (msurface_t *)((sortedface_t *)a)->surf;
+	surf2 = (msurface_t *)((sortedface_t *)b)->surf;
 
 	VectorAdd( RI.currententity->origin, surf1->info->origin, org1 );
 	VectorAdd( RI.currententity->origin, surf2->info->origin, org2 );
@@ -1603,7 +1603,7 @@ void R_DrawBrushModel( cl_entity_t *e )
 		{
 			if( psurf->plane->type != PLANE_Z && !FBitSet( e->curstate.effects, EF_WATERSIDES ))
 				continue;
-			if( mins[2] + 1.0 >= psurf->plane->dist )
+			if( mins[2] + 1.0f >= psurf->plane->dist )
 				continue;
 		}
 
@@ -1781,7 +1781,7 @@ R_GenerateVBO
 Allocate memory for arrays, fill it with vertex attribs and upload to GPU
 ===================
 */
-void R_GenerateVBO()
+void R_GenerateVBO( void )
 {
 	int numtextures = WORLDMODEL->numtextures;
 	int numlightmaps = gl_lms.current_lightmap_texture;
@@ -2033,7 +2033,7 @@ R_ClearVBO
 free all vbo data
 =============
 */
-void R_ClearVBO()
+void R_ClearVBO( void )
 {
 	vboarray_t *vbo;
 
@@ -2221,7 +2221,7 @@ static void R_AdditionalPasses( vboarray_t *vbo, int indexlen, void *indexarray,
 		pglScalef( glt->xscale, glt->yscale, 1 );
 
 		// draw
-#if !defined XASH_NANOGL || defined XASH_WES && defined __EMSCRIPTEN__ // WebGL need to know array sizes
+#if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 		if( pglDrawRangeElements )
 			pglDrawRangeElements( GL_TRIANGLES, 0, vbo->array_len, indexlen, GL_UNSIGNED_SHORT, indexarray );
 		else
@@ -2252,7 +2252,7 @@ Draw array for given vbotexture_t. build and draw dynamic lightmaps if present
 */
 static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture_t *texture, int lightmap, qboolean skiplighting )
 {
-#if !defined XASH_NANOGL || defined XASH_WES && defined __EMSCRIPTEN__ // WebGL need to know array sizes
+#if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 	if( pglDrawRangeElements )
 		pglDrawRangeElements( GL_TRIANGLES, 0, vbo->array_len, vbotex->curindex, GL_UNSIGNED_SHORT, vbotex->indexarray );
 	else
@@ -2269,7 +2269,7 @@ static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture
 		GL_SelectTexture( XASH_TEXTURE0 );
 		pglDisable( GL_TEXTURE_2D );
 		pglDisable( GL_DEPTH_TEST );
-#if !defined XASH_NANOGL || defined XASH_WES && defined __EMSCRIPTEN__ // WebGL need to know array sizes
+#if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 		if( pglDrawRangeElements )
 			pglDrawRangeElements( GL_LINES, 0, vbo->array_len, vbotex->curindex, GL_UNSIGNED_SHORT, vbotex->indexarray );
 		else
@@ -2340,7 +2340,7 @@ static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture
 				// out of free block space. Draw all generated index array and clear it
 				// upload already generated block
 				LM_UploadDynamicBlock();
-#if !defined XASH_NANOGL || defined XASH_WES && defined __EMSCRIPTEN__ // WebGL need to know array sizes
+#if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 				if( pglDrawRangeElements )
 					pglDrawRangeElements( GL_TRIANGLES, 0, vbo->array_len, dlightindex, GL_UNSIGNED_SHORT, dlightarray );
 				else
@@ -2362,10 +2362,10 @@ static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture
 					R_SetDecalMode( true );
 					if( vbos.decal_dlight_vbo )
 					{
-						pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), offsetof( vbovertex_t, lm_tc ) );
+						pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof( vbovertex_t, lm_tc ) );
 						GL_SelectTexture( mtst.tmu_gl );
-						pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), offsetof( vbovertex_t, gl_tc ) );
-						pglVertexPointer( 3, GL_FLOAT, sizeof( vbovertex_t ), offsetof( vbovertex_t, pos ) );
+						pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof( vbovertex_t, gl_tc ) );
+						pglVertexPointer( 3, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof( vbovertex_t, pos ) );
 					}
 					else
 					{
@@ -2520,7 +2520,7 @@ static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture
 			LM_UploadDynamicBlock();
 
 			// draw remaining array
-#if !defined XASH_NANOGL || defined XASH_WES && defined __EMSCRIPTEN__ // WebGL need to know array sizes
+#if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 			if( pglDrawRangeElements )
 				pglDrawRangeElements( GL_TRIANGLES, 0, vbo->array_len, dlightindex, GL_UNSIGNED_SHORT, dlightarray );
 			else
@@ -2544,10 +2544,10 @@ static void R_DrawLightmappedVBO( vboarray_t *vbo, vbotexture_t *vbotex, texture
 				R_SetDecalMode( true );
 				if( vbos.decal_dlight_vbo )
 				{
-					pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), offsetof( vbovertex_t, lm_tc ) );
+					pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof( vbovertex_t, lm_tc ) );
 					GL_SelectTexture( mtst.tmu_gl );
-					pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), offsetof( vbovertex_t, gl_tc ) );
-					pglVertexPointer( 3, GL_FLOAT, sizeof( vbovertex_t ), offsetof( vbovertex_t, pos ) );
+					pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof( vbovertex_t, gl_tc ) );
+					pglVertexPointer( 3, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof( vbovertex_t, pos ) );
 				}
 				else
 				{
@@ -2910,7 +2910,7 @@ static qboolean R_CheckLightMap( msurface_t *fa )
 	}
 
 	// already up to date
-	if( !is_dynamic && ( fa->dlightframe != tr.framecount || maps == MAX_LIGHTMAPS ) )
+	if( !is_dynamic && ( fa->dlightframe != tr.framecount || maps == MAXLIGHTMAPS ) )
 		return false;
 
 	// build lightmap

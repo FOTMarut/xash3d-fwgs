@@ -16,9 +16,11 @@ GNU General Public License for more details.
 #include "xash3d_types.h"
 #include "const.h"
 #include "com_model.h"
-#include <math.h>
 #include "mathlib.h"
 #include "eiface.h"
+#if HAVE_TGMATH_H
+#include <tgmath.h>
+#endif
 
 #define NUM_HULL_ROUNDS	ARRAYSIZE( hull_table )
 #define HULL_PRECISION	4
@@ -50,7 +52,7 @@ anglemod
 */
 float anglemod( float a )
 {
-	a = (360.0 / 65536) * ((int)(a*(65536/360.0)) & 65535);
+	a = (360.0f / 65536) * ((int)(a*(65536/360.0f)) & 65535);
 	return a;
 }
 
@@ -133,7 +135,7 @@ void RoundUpHullSize( vec3_t size )
 	for( i = 0; i < 3; i++)
 	{
 		qboolean	negative = false;
-                    float	result, value;
+		float	result, value;
 
 		value = size[i];
 		if( value < 0.0f ) negative = true;
@@ -142,7 +144,7 @@ void RoundUpHullSize( vec3_t size )
 
 		// lookup hull table to find nearest supposed value
 		for( j = 0; j < NUM_HULL_ROUNDS; j++ )
-          	{
+		{
 			if( value > hull_table[j] )
 				continue;	// ceil only
 
@@ -325,8 +327,8 @@ void SinCos( float radians, float *sine, float *cosine )
 		fstp dword ptr [eax]
 	}
 #else
-	*sine = sinf(radians);
-	*cosine = cosf(radians);
+	*sine = sin(radians);
+	*cosine = cos(radians);
 #endif
 }
 
@@ -388,7 +390,7 @@ AngleVectors
 
 =================
 */
-void AngleVectors( const vec3_t angles, vec3_t forward, vec3_t right, vec3_t up )
+void GAME_EXPORT AngleVectors( const vec3_t angles, vec3_t forward, vec3_t right, vec3_t up )
 {
 	float	sr, sp, sy, cr, cp, cy;
 
@@ -424,7 +426,7 @@ VectorAngles
 
 =================
 */
-void VectorAngles( const float *forward, float *angles )
+void GAME_EXPORT VectorAngles( const float *forward, float *angles )
 {
 	float	tmp, yaw, pitch;
 
@@ -444,11 +446,11 @@ void VectorAngles( const float *forward, float *angles )
 	}
 	else
 	{
-		yaw = ( atan2( forward[1], forward[0] ) * 180 / M_PI );
+		yaw = ( atan2( forward[1], forward[0] ) * 180 / M_PI_F );
 		if( yaw < 0 ) yaw += 360;
 
 		tmp = sqrt( forward[0] * forward[0] + forward[1] * forward[1] );
-		pitch = ( atan2( forward[2], tmp ) * 180 / M_PI );
+		pitch = ( atan2( forward[2], tmp ) * 180 / M_PI_F );
 		if( pitch < 0 ) pitch += 360;
 	}
 
@@ -737,8 +739,8 @@ void QuaternionSlerpNoAlign( const vec4_t p, const vec4_t q, float t, vec4_t qt 
 		qt[1] = q[0];
 		qt[2] = -q[3];
 		qt[3] = q[2];
-		sclp = sin(( 1.0f - t ) * ( 0.5f * M_PI ));
-		sclq = sin( t * ( 0.5f * M_PI ));
+		sclp = sin(( 1.0f - t ) * ( 0.5f * M_PI_F ));
+		sclq = sin( t * ( 0.5f * M_PI_F ));
 
 		for( i = 0; i < 3; i++ )
 		{
@@ -800,7 +802,7 @@ void V_AdjustFov( float *fov_x, float *fov_y, float width, float height, qboolea
 
 	if( lock_x )
 	{
-		*fov_y = 2 * atan((width * 3) / (height * 4) * tan( *fov_y * M_PI / 360.0 * 0.5 )) * 360 / M_PI;
+		*fov_y = 2 * atan((width * 3) / (height * 4) * tan( *fov_y * M_PI_F / 360.0f * 0.5f )) * 360 / M_PI_F;
 		return;
 	}
 

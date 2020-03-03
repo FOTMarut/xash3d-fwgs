@@ -60,6 +60,9 @@ GNU General Public License for more details.
 #define PARM_GLES_WRAPPER	35	//
 #define PARM_STENCIL_ACTIVE	36
 #define PARM_WATER_ALPHA	37
+#define PARM_TEX_MEMORY	38	// returns total memory of uploaded texture in bytes
+#define PARM_DELUXEDATA	39	// nasty hack, convert int to pointer
+#define PARM_SHADOWDATA	40	// nasty hack, convert int to pointer
 
 // skybox ordering
 enum
@@ -93,7 +96,7 @@ typedef enum
 	TF_NORMALMAP	= (1<<15),	// is a normalmap
 	TF_HAS_ALPHA	= (1<<16),	// image has alpha (used only for GL_CreateTexture)
 	TF_FORCE_COLOR	= (1<<17),	// force upload monochrome textures as RGB (detail textures)
-// reserved
+	TF_UPDATE		= (1<<18),	// allow to update already loaded texture
 	TF_BORDER		= (1<<19),	// zero clamp for projected textures
 	TF_TEXTURE_3D	= (1<<20),	// this is GL_TEXTURE_3D
 	TF_ATLAS_PAGE	= (1<<21),	// bit who indicate lightmap page or deluxemap page
@@ -108,16 +111,18 @@ typedef enum
 
 typedef enum
 {
-	CONTEXT_TYPE_GL = 0,
+	CONTEXT_TYPE_GL = 0, // compatibility profile
 	CONTEXT_TYPE_GLES_1_X,
-	CONTEXT_TYPE_GLES_2_X
+	CONTEXT_TYPE_GLES_2_X,
+	CONTEXT_TYPE_GL_CORE
 } gl_context_type_t;
 
 typedef enum
 {
-	GLES_WRAPPER_NONE = 0,		// native GLES
+	GLES_WRAPPER_NONE = 0,		// native GL
 	GLES_WRAPPER_NANOGL,		// used on GLES platforms
 	GLES_WRAPPER_WES,		// used on GLES platforms
+	GLES_WRAPPER_GL4ES,		// used on GLES platforms
 } gles_wrapper_t;
 
 // 30 bytes here
@@ -219,8 +224,8 @@ typedef struct render_api_s
 	struct mstudiotex_s *( *StudioGetTexture )( struct cl_entity_s *e );
 	const struct ref_overview_s *( *GetOverviewParms )( void );
 	const char	*( *GetFileByIndex )( int fileindex );
-	void		(*R_Reserved0)( void );	// for potential interface expansion without broken compatibility
-	void		(*R_Reserved1)( void );
+	int		(*pfnSaveFile)( const char *filename, const void *data, int len );
+	void		(*R_Reserved0)( void );
 
 	// static allocations
 	void		*(*pfnMemAlloc)( size_t cb, const char *filename, const int fileline );
@@ -266,6 +271,8 @@ typedef struct render_interface_s
 	void		(*R_NewMap)( void );
 	// clear the render entities before each frame
 	void		(*R_ClearScene)( void );
+	// shuffle previous & next states for lerping
+	void		(*CL_UpdateLatchedVars)( struct cl_entity_s *e, qboolean reset );
 } render_interface_t;
 
 #endif//RENDER_API_H

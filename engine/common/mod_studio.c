@@ -320,19 +320,19 @@ static void Mod_StudioCalcBoneAdj( float *adj, const byte *pcontroller )
 		if( i == STUDIO_MOUTH )
 			continue; // ignore mouth
 
-		if( i <= MAXSTUDIOCONTROLLERS )
+		if( i >= MAXSTUDIOCONTROLLERS )
+			continue;
+
+		// check for 360% wrapping
+		if( pbonecontroller[j].type & STUDIO_RLOOP )
 		{
-			// check for 360% wrapping
-			if( pbonecontroller[j].type & STUDIO_RLOOP )
-			{
-				value = pcontroller[i] * (360.0f / 256.0f) + pbonecontroller[j].start;
-			}
-			else 
-			{
-				value = pcontroller[i] / 255.0f;
-				value = bound( 0.0f, value, 1.0f );
-				value = (1.0f - value) * pbonecontroller[j].start + value * pbonecontroller[j].end;
-			}
+			value = pcontroller[i] * (360.0f / 256.0f) + pbonecontroller[j].start;
+		}
+		else
+		{
+			value = pcontroller[i] / 255.0f;
+			value = bound( 0.0f, value, 1.0f );
+			value = (1.0f - value) * pbonecontroller[j].start + value * pbonecontroller[j].end;
 		}
 
 		switch( pbonecontroller[j].type & STUDIO_TYPES )
@@ -340,7 +340,7 @@ static void Mod_StudioCalcBoneAdj( float *adj, const byte *pcontroller )
 		case STUDIO_XR:
 		case STUDIO_YR:
 		case STUDIO_ZR:
-			adj[j] = value * (M_PI / 180.0f);
+			adj[j] = value * (M_PI_F / 180.0f);
 			break;
 		case STUDIO_X:
 		case STUDIO_Y:
@@ -598,8 +598,8 @@ void *R_StudioGetAnim( studiohdr_t *m_pStudioHeader, model_t *m_pSubModel, mstud
 {
 	mstudioseqgroup_t	*pseqgroup;
 	cache_user_t	*paSequences;
-	size_t		filesize;
-		  byte		*buf;
+	fs_offset_t	filesize;
+	byte		*buf;
 
 	pseqgroup = (mstudioseqgroup_t *)((byte *)m_pStudioHeader + m_pStudioHeader->seqgroupindex) + pseqdesc->seqgroup;
 	if( pseqdesc->seqgroup == 0 )
@@ -749,6 +749,8 @@ void Mod_StudioGetAttachment( const edict_t *e, int iAtt, float *origin, float *
 {
 	mstudioattachment_t		*pAtt;
 	vec3_t			angles2;
+	matrix3x4			localPose;
+	matrix3x4			worldPose;
 	model_t			*mod;
 
 	mod = SV_ModelHandle( e->v.modelindex );
@@ -776,19 +778,15 @@ void Mod_StudioGetAttachment( const edict_t *e, int iAtt, float *origin, float *
 
 	pBlendAPI->SV_StudioSetupBones( mod, e->v.frame, e->v.sequence, angles2, e->v.origin, e->v.controller, e->v.blending, pAtt->bone, e );
 
-	// compute pos and angles
-	if( origin != NULL )
-		Matrix3x4_VectorTransform( studio_bones[pAtt->bone], pAtt->org, origin );
+	Matrix3x4_LoadIdentity( localPose );
+	Matrix3x4_SetOrigin( localPose, pAtt->org[0], pAtt->org[1], pAtt->org[2] );
+	Matrix3x4_ConcatTransforms( worldPose, studio_bones[pAtt->bone], localPose );
 
-	if( FBitSet( host.features, ENGINE_COMPUTE_STUDIO_LERP ) && origin != NULL && angles != NULL )
-	{
-		vec3_t	forward, bonepos;
+	if( origin != NULL ) // origin is used always
+		Matrix3x4_OriginFromMatrix( worldPose, origin );
 
-		Matrix3x4_OriginFromMatrix( studio_bones[pAtt->bone], bonepos );
-		VectorSubtract( origin, bonepos, forward ); // make forward
-		VectorNormalizeFast( forward );
-		VectorAngles( forward, angles );
-	}
+	if( FBitSet( host.features, ENGINE_COMPUTE_STUDIO_LERP ) && angles != NULL )
+		Matrix3x4_AnglesFromMatrix( worldPose, angles );
 }
 
 /*
@@ -807,7 +805,7 @@ void Mod_GetBonePosition( const edict_t *e, int iBone, float *origin, float *ang
 	pBlendAPI->SV_StudioSetupBones( mod, e->v.frame, e->v.sequence, e->v.angles, e->v.origin, e->v.controller, e->v.blending, iBone, e );
 
 	if( origin ) Matrix3x4_OriginFromMatrix( studio_bones[iBone], origin );
-	if( angles ) VectorAngles( studio_bones[iBone][0], angles ); // bone forward to angles
+	if( angles ) Matrix3x4_AnglesFromMatrix( studio_bones[iBone], angles );
 }
 
 /*

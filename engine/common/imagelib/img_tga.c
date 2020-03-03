@@ -21,11 +21,12 @@ GNU General Public License for more details.
 Image_LoadTGA
 =============
 */
-qboolean Image_LoadTGA( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadTGA( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	int	i, columns, rows, row_inc, row, col;
 	byte	*buf_p, *pixbuf, *targa_rgba;
-	byte	palette[256][4], red = 0, green = 0, blue = 0, alpha = 0;
+	rgba_t	palette[256];
+	byte	red = 0, green = 0, blue = 0, alpha = 0;
 	int	readpixelcount, pixelcount;
 	int	reflectivity[3] = { 0, 0, 0 };
 	qboolean	compressed;
@@ -111,7 +112,7 @@ qboolean Image_LoadTGA( const char *name, const byte *buffer, size_t filesize )
 	else if( targa_header.image_type == 3 || targa_header.image_type == 11 )
 	{
 		// uncompressed greyscale
-		if( targa_header.pixel_size != 8 )
+		if( targa_header.pixel_size != 8 && targa_header.pixel_size != 16 )
 		{
 			Con_DPrintf( S_ERROR "Image_LoadTGA: (%s) Only 8 bit images supported for type 3 and 11\n", name );
 			return false;
@@ -160,11 +161,14 @@ qboolean Image_LoadTGA( const char *name, const byte *buffer, size_t filesize )
 				case 9:
 					// colormapped image
 					blue = *buf_p++;
-					red = palette[blue][0];
-					green = palette[blue][1];
-					alpha = palette[blue][3];
-					blue = palette[blue][2];
-					if( alpha != 255 ) image.flags |= IMAGE_HAS_ALPHA;
+					if( blue < targa_header.colormap_length )
+					{
+						red = palette[blue][0];
+						green = palette[blue][1];
+						alpha = palette[blue][3];
+						blue = palette[blue][2];
+						if( alpha != 255 ) image.flags |= IMAGE_HAS_ALPHA;
+					}
 					break;
 				case 2:
 				case 10:
@@ -184,7 +188,14 @@ qboolean Image_LoadTGA( const char *name, const byte *buffer, size_t filesize )
 				case 11:
 					// greyscale image
 					blue = green = red = *buf_p++;
-					alpha = 255;
+					if( targa_header.pixel_size == 16 )
+					{
+						alpha = *buf_p++;
+						if( alpha != 255 )
+							image.flags |= IMAGE_HAS_ALPHA;
+					}
+					else
+						alpha = 255;
 					break;
 				}
 			}
@@ -231,9 +242,22 @@ qboolean Image_SaveTGA( const char *name, rgbdata_t *pix )
 	if( FS_FileExists( name, false ) && !Image_CheckFlag( IL_ALLOW_OVERWRITE ))
 		return false; // already existed
 
-	if( pix->flags & IMAGE_HAS_ALPHA )
-		outsize = pix->width * pix->height * 4 + 18 + Q_strlen( comment );
-	else outsize = pix->width * pix->height * 3 + 18 + Q_strlen( comment );
+	// bogus parameter check
+	if( !pix->buffer )
+		return false;
+
+	// get image description
+	switch( pix->type )
+	{
+	case PF_RGB_24:
+	case PF_BGR_24: pixel_size = 3; break;
+	case PF_RGBA_32:
+	case PF_BGRA_32: pixel_size = 4; break;
+	default:
+		return false;
+	}
+
+	outsize = pix->width * pix->height * pixel_size + 18 + Q_strlen( comment );
 
 	buffer = (byte *)Mem_Calloc( host.imagepool, outsize );
 
@@ -248,18 +272,6 @@ qboolean Image_SaveTGA( const char *name, rgbdata_t *pix )
 	buffer[17] = ( pix->flags & IMAGE_HAS_ALPHA ) ? 8 : 0; // 8 bits of alpha
 	Q_strncpy( buffer + 18, comment, Q_strlen( comment )); 
 	out = buffer + 18 + Q_strlen( comment );
-
-	// get image description
-	switch( pix->type )
-	{
-	case PF_RGB_24:
-	case PF_BGR_24: pixel_size = 3; break;
-	case PF_RGBA_32:
-	case PF_BGRA_32: pixel_size = 4; break;	
-	default:
-		Mem_Free( buffer );
-		return false;
-	}
 
 	switch( pix->type )
 	{

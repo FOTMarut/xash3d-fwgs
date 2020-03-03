@@ -86,8 +86,7 @@ void HPAK_CreatePak( const char *filename, resource_t *pResource, byte *pData, f
 {
 	int		filelocation;
 	string		pakname;
-	char		md5[16];
-	char		*temp;
+	byte		md5[16];
 	file_t		*fout;
 	MD5Context_t	ctx;
 
@@ -115,6 +114,8 @@ void HPAK_CreatePak( const char *filename, resource_t *pResource, byte *pData, f
 
 	if( pData == NULL )
 	{
+		byte *temp;
+
 		// there are better ways
 		filelocation = FS_Tell( fin );
 		temp = Z_Malloc( pResource->nDownloadSize );
@@ -196,8 +197,7 @@ void HPAK_AddLump( qboolean bUseQueue, const char *name, resource_t *pResource, 
 	hpak_info_t	srcpak, dstpak;
 	file_t		*file_src;
 	file_t		*file_dst;
-	char		md5[16];
-	byte		*temp;
+	byte		md5[16];
 	MD5Context_t	ctx;
 
 	if( pData == NULL && pFile == NULL )
@@ -215,6 +215,8 @@ void HPAK_AddLump( qboolean bUseQueue, const char *name, resource_t *pResource, 
 
 	if( pData == NULL )
 	{
+		byte		*temp;
+
 		// there are better ways
 		position = FS_Tell( pFile );
 		temp = Z_Malloc( pResource->nDownloadSize );
@@ -275,6 +277,7 @@ void HPAK_AddLump( qboolean bUseQueue, const char *name, resource_t *pResource, 
 		Con_DPrintf( S_ERROR "HPAK_AddLump: %s does not have a valid header.\n", srcname );
 		FS_Close( file_src );
 		FS_Close( file_dst );
+		return;
 	}
 
 	length = FS_FileLength( file_src );
@@ -295,12 +298,12 @@ void HPAK_AddLump( qboolean bUseQueue, const char *name, resource_t *pResource, 
 	// load the data
 	srcpak.entries = Z_Malloc( sizeof( hpak_lump_t ) * srcpak.count );
 	FS_Read( file_src, srcpak.entries, sizeof( hpak_lump_t ) * srcpak.count );
-	FS_Close( file_src );
 
 	// check if already exists
 	if( HPAK_FindResource( &srcpak, pResource->rgucMD5_hash, NULL ))
 	{
 		Z_Free( srcpak.entries );
+		FS_Close( file_src );
 		FS_Close( file_dst );
 		FS_Delete( dstname );
 		return;
@@ -350,6 +353,8 @@ void HPAK_AddLump( qboolean bUseQueue, const char *name, resource_t *pResource, 
 
 	FS_Seek( file_dst, 0, SEEK_SET );
 	FS_Write( file_dst, &hash_pack_header, sizeof( hpak_header_t ));
+
+	FS_Close( file_src );
 	FS_Close( file_dst );
 
 	FS_Delete( srcname );
@@ -366,7 +371,7 @@ static qboolean HPAK_Validate( const char *filename, qboolean quiet )
 	MD5Context_t	MD5_Hash;
 	string		pakname;
 	resource_t	*pRes;
-	char		md5[16];
+	byte		md5[16];
 
 	if( quiet ) HPAK_FlushHostQueue();
 

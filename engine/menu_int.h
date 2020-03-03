@@ -52,7 +52,7 @@ struct ref_viewpass_s;
 typedef struct ui_enginefuncs_s
 {
 	// image handlers
-	HIMAGE	(*pfnPIC_Load)( const char *szPicName, const byte *ucRawImage, long ulRawImageSize, long flags );
+	HIMAGE	(*pfnPIC_Load)( const char *szPicName, const byte *ucRawImage, int ulRawImageSize, int flags );
 	void	(*pfnPIC_Free)( const char *szPicName );
 	int	(*pfnPIC_Width)( HIMAGE hPic );
 	int	(*pfnPIC_Height)( HIMAGE hPic );
@@ -78,7 +78,7 @@ typedef struct ui_enginefuncs_s
 	int	(*pfnAddCommand)( const char *cmd_name, void (*function)(void) );
 	void	(*pfnClientCmd)( int execute_now, const char *szCmdString );
 	void	(*pfnDelCommand)( const char *cmd_name );
-	int       (*pfnCmdArgc)( void );	
+	int (*pfnCmdArgc)( void );
 	const char*	(*pfnCmdArgv)( int argc );
 	const char*	(*pfnCmd_Args)( void );
 
@@ -168,16 +168,9 @@ typedef struct ui_enginefuncs_s
 	int	(*pfnCompareFileTime)( const char *filename1, const char *filename2, int *iCompare );
 
 	const char *(*pfnGetModeString)( int vid_mode );
-	int	(*COM_SaveFile)( const char *filename, const void *data, long len );
+	int	(*COM_SaveFile)( const char *filename, const void *data, int len );
 	int	(*COM_RemoveFile)( const char *filepath );
 } ui_enginefuncs_t;
-
-typedef struct ui_textfuncs_s {
-	void (*pfnEnableTextInput)( int enable );
-	int (*pfnUtfProcessChar) ( int ch );
-	int (*pfnUtfMoveLeft) ( char *str, int pos );
-	int (*pfnUtfMoveRight) ( char *str, int pos, int length );
-} ui_textfuncs_t;
 
 typedef struct
 {
@@ -199,11 +192,45 @@ typedef struct
 	void	(*pfnFinalCredits)( void );	// show credits + game end
 } UI_FUNCTIONS;
 
+#define MENU_EXTENDED_API_VERSION 1
+
+typedef struct ui_extendedfuncs_s {
+	// text functions, frozen
+	void (*pfnEnableTextInput)( int enable );
+	int (*pfnUtfProcessChar) ( int ch );
+	int (*pfnUtfMoveLeft) ( char *str, int pos );
+	int (*pfnUtfMoveRight) ( char *str, int pos, int length );
+
+	// new engine extended api start here
+	// returns 1 if there are more in list, otherwise 0
+	int (*pfnGetRenderers)( unsigned int num, char *shortName, size_t size1, char *readableName, size_t size2 );
+} ui_extendedfuncs_t;
+
+// deprecated export from old engine
+typedef void (*ADDTOUCHBUTTONTOLIST)( const char *name, const char *texture, const char *command, unsigned char *color, int flags );
+
+typedef struct
+{
+	ADDTOUCHBUTTONTOLIST pfnAddTouchButtonToList;
+	void (*pfnResetPing)( void );
+	void (*pfnShowConnectionWarning)( void );
+	void (*pfnShowUpdateDialog)( int preferStore );
+	void (*pfnShowMessageBox)( const char *text );
+	void (*pfnConnectionProgress_Disconnect)( void );
+	void (*pfnConnectionProgress_Download)( const char *pszFileName, const char *pszServerName, int iCurrent, int iTotal, const char *comment );
+	void (*pfnConnectionProgress_DownloadEnd)( void );
+	void (*pfnConnectionProgress_Precache)( void );
+	void (*pfnConnectionProgress_Connect)( const char *server ); // NULL for local server
+	void (*pfnConnectionProgress_ChangeLevel)( void );
+	void (*pfnConnectionProgress_ParseServerInfo)( const char *server );
+} UI_EXTENDED_FUNCTIONS;
+
 typedef int (*MENUAPI)( UI_FUNCTIONS *pFunctionTable, ui_enginefuncs_t* engfuncs, ui_globalvars_t *pGlobals );
 
-typedef int (*UITEXTAPI)( ui_textfuncs_t* engfuncs );
+typedef int (*UIEXTENEDEDAPI)( int version, UI_EXTENDED_FUNCTIONS *pFunctionTable, ui_extendedfuncs_t *engfuncs );
 
-typedef void (*ADDTOUCHBUTTONTOLIST)( const char *name, const char *texture, const char *command, unsigned char *color, int flags );
+// deprecated interface from old engine
+typedef int (*UITEXTAPI)( ui_extendedfuncs_t* engfuncs );
 
 #define PLATFORM_UPDATE_PAGE "PlatformUpdatePage"
 #define GENERIC_UPDATE_PAGE "GenericUpdatePage"

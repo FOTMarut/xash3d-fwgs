@@ -18,6 +18,7 @@ GNU General Public License for more details.
 #include "vgui_draw.h"
 #include "qfont.h"
 #include "input.h"
+#include "library.h"
 
 convar_t *scr_centertime;
 convar_t *scr_loading;
@@ -95,7 +96,7 @@ void SCR_DrawFPS( int height )
 			Q_snprintf( fpsstring, sizeof( fpsstring ), "fps: ^1%4i min, ^3%4i cur, ^2%4i max", minfps, curfps, maxfps );
 		else Q_snprintf( fpsstring, sizeof( fpsstring ), "%4i fps", curfps );
 		MakeRGBA( color, 255, 255, 255, 255 );
-          }
+	}
 
 	Con_DrawStringLen( fpsstring, &offset, NULL );
 	Con_DrawString( refState.width - offset - 4, height, fpsstring, color );
@@ -341,13 +342,18 @@ SCR_BeginLoadingPlaque
 */
 void SCR_BeginLoadingPlaque( qboolean is_background )
 {
+	float	oldclear;
 	S_StopAllSounds( true );
 	cl.audio_prepped = false;			// don't play ambients
+	cl.video_prepped = false;
+
+	if( !Host_IsDedicated() )
+		oldclear = gl_clear->value;
 
 	if( CL_IsInMenu( ) && !cls.changedemo && !is_background )
 	{
 		UI_SetActiveMenu( false );
-		if( cls.state == ca_disconnected )
+		if( cls.state == ca_disconnected && !(GameState->curstate == STATE_RUNFRAME && GameState->nextstate != STATE_RUNFRAME) )
 			SCR_UpdateScreen();
 	}
 
@@ -357,12 +363,19 @@ void SCR_BeginLoadingPlaque( qboolean is_background )
 	if( cls.key_dest == key_console )
 		return;
 
+	if( !Host_IsDedicated() )
+		gl_clear->value = 0.0f;
+
 	if( is_background ) IN_MouseSavePos( );
 	cls.draw_changelevel = !is_background;
 	SCR_UpdateScreen();
 	cls.disable_screen = host.realtime;
 	cls.disable_servercount = cl.servercount;
 	cl.background = is_background;		// set right state before svc_serverdata is came
+
+	if( !Host_IsDedicated() )
+		gl_clear->value = oldclear;
+
 //	SNDDMA_LockSound();
 }
 
@@ -550,7 +563,7 @@ qboolean SCR_LoadVariableWidthFont( const char *fontname )
 {
 	int	i, fontWidth;
 	byte	*buffer;
-	size_t	length;
+	fs_offset_t	length;
 	qfont_t	*src;
 
 	if( cls.creditsFont.valid )
@@ -720,6 +733,9 @@ SCR_VidInit
 */
 void SCR_VidInit( void )
 {
+	if( !ref.initialized ) // don't call VidInit too soon
+		return;
+
 	memset( &clgame.ds, 0, sizeof( clgame.ds )); // reset a draw state
 	memset( &gameui.ds, 0, sizeof( gameui.ds )); // reset a draw state
 	memset( &clgame.centerPrint, 0, sizeof( clgame.centerPrint ));
@@ -731,7 +747,7 @@ void SCR_VidInit( void )
 		gameui.globals->scrHeight = refState.height;
 	}
 
-	VGui_Startup( refState.width, refState.height );
+	VGui_Startup( NULL, refState.width, refState.height ); // initialized already, so pass NULL
 
 	CL_ClearSpriteTextures(); // now all hud sprites are invalid
 	
@@ -771,7 +787,7 @@ void SCR_Init( void )
 
 	if( !UI_LoadProgs( ))
 	{
-		Con_Printf( S_ERROR "can't initialize gameui.dll\n" ); // there is non fatal for us
+		Con_Printf( S_ERROR "can't initialize gameui DLL: %s\n", COM_GetLibraryError() ); // there is non fatal for us
 		host.allow_console = true; // we need console, because menu is missing
 	}
 

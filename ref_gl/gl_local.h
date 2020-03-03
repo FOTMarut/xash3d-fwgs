@@ -33,6 +33,7 @@ GNU General Public License for more details.
 #include "pm_movevars.h"
 //#include "cvar.h"
 #include "gl_export.h"
+#include "wadfile.h"
 
 #ifndef offsetof
 #define offsetof(s,m)       (size_t)&(((s *)0)->m)
@@ -217,7 +218,7 @@ typedef struct
 
 	msurface_t	*draw_decals[MAX_DECAL_SURFS];
 	int		num_draw_decals;
-         
+
 	// OpenGL matrix states
 	qboolean		modelviewIdentity;
 
@@ -230,10 +231,6 @@ typedef struct
 	qboolean		fCustomRendering;
 	qboolean		fResetVis;
 	qboolean		fFlipViewModel;
-
-	// tree visualization stuff
-	int		recursion_level;
-	int		max_recursion;
 
 	byte		visbytes[(MAX_MAP_LEAFS+7)/8];	// member custom PVS
 	int		lightstylevalue[MAX_LIGHTSTYLES];	// value 0 - 65536
@@ -297,7 +294,6 @@ void GL_SetRenderMode( int mode );
 void GL_TextureTarget( uint target );
 void GL_Cull( GLenum cull );
 void R_ShowTextures( void );
-void R_ShowTree( void );
 void SCR_TimeRefresh_f( void );
 
 //
@@ -360,6 +356,7 @@ void R_InitDlightTexture( void );
 void R_TextureList_f( void );
 void R_InitImages( void );
 void R_ShutdownImages( void );
+int GL_TexMemory( void );
 
 //
 // gl_rlight.c
@@ -388,6 +385,7 @@ void R_SetupGL( qboolean set_gl_state );
 void R_AllowFog( qboolean allowed );
 void R_SetupFrustum( void );
 void R_FindViewLeaf( void );
+void R_CheckGamma( void );
 void R_PushScene( void );
 void R_PopScene( void );
 void R_DrawFog( void );
@@ -433,8 +431,8 @@ void GL_RebuildLightmaps( void );
 void GL_InitRandomTable( void );
 void GL_BuildLightmaps( void );
 void GL_ResetFogColor( void );
-void R_GenerateVBO();
-void R_ClearVBO();
+void R_GenerateVBO( void );
+void R_ClearVBO( void );
 void R_AddDecalVBO( decal_t *pdecal, msurface_t *surf );
 
 //
@@ -483,7 +481,6 @@ void R_AliasInit( void );
 //
 // gl_warp.c
 //
-typedef struct mip_s mip_t;
 void R_InitSkyClouds( mip_t *mt, struct texture_s *tx, qboolean custom_palette );
 void R_AddSkyBoxSurface( msurface_t *fa );
 void R_ClearSkyBox( void );
@@ -525,7 +522,7 @@ void GL_FreeImage( const char *name );
 qboolean VID_ScreenShot( const char *filename, int shot_type );
 qboolean VID_CubemapShot( const char *base, uint size, const float *vieworg, qboolean skyshot );
 void R_BeginFrame( qboolean clearScene );
-int R_RenderFrame( const struct ref_viewpass_s *vp );
+void R_RenderFrame( const struct ref_viewpass_s *vp );
 void R_EndFrame( void );
 void R_ClearScene( void );
 void R_GetTextureParms( int *w, int *h, int texnum );
@@ -565,7 +562,7 @@ void GL_CheckForErrors_( const char *filename, const int fileline );
 const char *GL_ErrorString( int err );
 qboolean GL_Support( int r_ext );
 int GL_MaxTextureUnits( void );
-void GL_CheckExtension( const char *name, const dllfunc_t *funcs, const char *cvarname, int r_ext );
+qboolean GL_CheckExtension( const char *name, const dllfunc_t *funcs, const char *cvarname, int r_ext );
 void GL_SetExtension( int r_ext, int enable );
 
 //
@@ -618,6 +615,7 @@ enum
 	GL_DEPTH_TEXTURE,
 	GL_DEBUG_OUTPUT,
 	GL_ARB_VERTEX_BUFFER_OBJECT_EXT,
+	GL_DRAW_RANGEELEMENTS_EXT,
 	GL_EXTCOUNT,		// must be last
 };
 
@@ -668,6 +666,7 @@ typedef struct
 	gles_wrapper_t	wrapper;
 
 	qboolean		softwareGammaUpdate;
+	qboolean		fCustomRenderer;
 	int		prev_width;
 	int		prev_height;
 } glconfig_t;
@@ -682,6 +681,7 @@ typedef struct
 	GLboolean		texIdentityMatrix[MAX_TEXTURE_UNITS];
 	GLint		genSTEnabled[MAX_TEXTURE_UNITS];	// 0 - disabled, OR 1 - S, OR 2 - T, OR 4 - R
 	GLint		texCoordArrayMode[MAX_TEXTURE_UNITS];	// 0 - disabled, 1 - enabled, 2 - cubemap
+	GLint		isFogEnabled;
 
 	int		faceCull;
 
@@ -692,13 +692,6 @@ typedef struct
 
 typedef struct
 {
-	void*	context; // handle to GL rendering context
-	int		safe;
-
-	int		desktopBitsPixel;
-	int		desktopWidth;
-	int		desktopHeight;
-
 	qboolean		initialized;	// OpenGL subsystem started
 	qboolean		extended;		// extended context allows to GL_Debug
 } glwstate_t;
@@ -738,7 +731,6 @@ extern cvar_t *gl_stencilbits;
 extern cvar_t	*r_speeds;
 extern cvar_t	*r_fullbright;
 extern cvar_t	*r_norefresh;
-extern cvar_t	*r_showtree;	// build graph of visible hull
 extern cvar_t	*r_lighting_extended;
 extern cvar_t	*r_lighting_modulate;
 extern cvar_t	*r_lighting_ambient;

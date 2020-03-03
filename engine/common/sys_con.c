@@ -14,15 +14,15 @@ GNU General Public License for more details.
 */
 
 #include "common.h"
-#ifdef __ANDROID__
+#if XASH_ANDROID
 #include <android/log.h>
 #endif
 
-#if !defined( _WIN32 ) && !defined( XASH_MOBILE_PLATFORM )
+#if !XASH_WIN32 && !XASH_MOBILE_PLATFORM
 #define XASH_COLORIZE_CONSOLE
 // use with caution, running engine in Qt Creator may cause a freeze in read() call
 // I was never encountered this bug anywhere else, so still enable by default
-#define XASH_USE_SELECT
+// #define XASH_USE_SELECT
 #endif
 
 #ifdef XASH_USE_SELECT
@@ -68,7 +68,7 @@ char *Sys_Input( void )
 		}
 	}
 #endif
-#ifdef _WIN32
+#if XASH_WIN32
 	return Wcon_Input();
 #endif
 	return NULL;
@@ -78,7 +78,7 @@ void Sys_DestroyConsole( void )
 {
 	// last text message into console or log
 	Con_Reportf( "Sys_DestroyConsole: Exiting!\n" );
-#ifdef _WIN32
+#if XASH_WIN32
 	Wcon_DestroyConsole();
 #endif
 }
@@ -162,7 +162,7 @@ void Sys_PrintLog( const char *pMsg )
 
 	time( &crt_time );
 	crt_tm = localtime( &crt_time );
-#ifdef __ANDROID__
+#if XASH_ANDROID && !XASH_DEDICATED
 	__android_log_print( ANDROID_LOG_DEBUG, "Xash", "%s", pMsg );
 #endif
 
@@ -219,20 +219,20 @@ void Sys_PrintLog( const char *pMsg )
 
 	}
 #else
-#if !defined __ANDROID__ || defined XASH_DEDICATED
+#if !XASH_ANDROID || XASH_DEDICATED
 	printf( "%s %s", logtime, pMsg );
 	fflush( stdout );
 #endif
 #endif
+
+	// save last char to detect when line was not ended
+	lastchar = pMsg[strlen(pMsg)-1];
 
 	if( !s_ld.logfile )
 		return;
 
 	if( !lastchar || lastchar == '\n')
 		strftime( logtime, sizeof( logtime ), "[%Y:%m:%d|%H:%M:%S]", crt_tm ); //full time
-
-	// save last char to detect when line was not ended
-	lastchar = pMsg[strlen(pMsg)-1];
 
 	fprintf( s_ld.logfile, "%s %s", logtime, pMsg );
 	fflush( s_ld.logfile );
@@ -251,7 +251,7 @@ Con_Printf
 
 =============
 */
-void Con_Printf( const char *szFmt, ... )
+void GAME_EXPORT Con_Printf( const char *szFmt, ... )
 {
 	static char	buffer[MAX_PRINT_MSG];
 	va_list		args;
@@ -272,7 +272,7 @@ Con_DPrintf
 
 =============
 */
-void Con_DPrintf( const char *szFmt, ... )
+void GAME_EXPORT Con_DPrintf( const char *szFmt, ... )
 {
 	static char	buffer[MAX_PRINT_MSG];
 	va_list		args;
@@ -310,3 +310,15 @@ void Con_Reportf( const char *szFmt, ... )
 
 	Sys_Print( buffer );
 }
+
+
+#if XASH_MESSAGEBOX == MSGBOX_STDERR
+void Platform_MessageBox( const char *title, const char *message, qboolean parentMainWindow )
+{
+	fprintf( stderr,
+		 "======================================\n"
+		 "%s: %s\n"
+		 "======================================\n", title, message );
+}
+#endif
+

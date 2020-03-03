@@ -63,7 +63,7 @@ void CL_CalcPlayerVelocity( int idx, vec3_t velocity )
 		if( dt != 0.0 )
 		{
 			VectorSubtract( clgame.entities[idx].curstate.velocity, clgame.entities[idx].prevstate.velocity, delta );
-			VectorScale( delta, 1.0 / dt, velocity );
+			VectorScale( delta, 1.0f / dt, velocity );
 		}
 		else
 		{
@@ -450,7 +450,7 @@ CL_PlaybackEvent
 
 =============
 */
-void CL_PlaybackEvent( int flags, const edict_t *pInvoker, word eventindex, float delay, float *origin,
+void GAME_EXPORT CL_PlaybackEvent( int flags, const edict_t *pInvoker, word eventindex, float delay, float *origin,
 	float *angles, float fparam1, float fparam2, int iparam1, int iparam2, int bparam1, int bparam2 )
 {
 	event_args_t	args;

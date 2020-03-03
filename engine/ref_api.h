@@ -39,7 +39,6 @@ GNU General Public License for more details.
 #define FCONTEXT_CORE_PROFILE		BIT( 0 )
 #define FCONTEXT_DEBUG_ARB		BIT( 1 )
 
-#define FCVAR_RENDERINFO		(1<<16)	// save to a seperate config called video.cfg
 #define FCVAR_READ_ONLY		(1<<17)	// cannot be set by user at all, and can't be requested by CvarGetPointer from game dlls
 
 // screenshot types
@@ -89,15 +88,13 @@ typedef struct ref_globals_s
 	// viewport width and height
 	int      width;
 	int      height;
+
 	qboolean fullScreen;
 	qboolean wideScreen;
 
 	vec3_t vieworg;
 	vec3_t viewangles;
 	vec3_t vforward, vright, vup;
-
-	cl_entity_t	*currententity;
-	model_t		*currentmodel;
 
 	// todo: fill this without engine help
 	// move to local
@@ -106,6 +103,8 @@ typedef struct ref_globals_s
 	sortedface_t	*draw_surfaces;	// used for sorting translucent surfaces
 	int		max_surfaces;	// max surfaces per submodel (for all models)
 	size_t		visbytes;		// cluster size
+
+	int desktopBitsPixel;
 } ref_globals_t;
 
 enum
@@ -129,6 +128,7 @@ enum // r_speeds counters
 #define REF_GRAY_TEXTURE     "*gray"
 #define REF_WHITE_TEXTURE    "*white"
 #define REF_BLACK_TEXTURE    "*black"
+#define REF_PARTICLE_TEXTURE "*particle"
 #define REF_SOLIDSKY_TEXTURE "solid_sky"
 #define REF_ALPHASKY_TEXTURE "alpha_sky"
 
@@ -166,29 +166,22 @@ typedef enum
 	SAFE_NOALPHA,     // don't set alpha bits
 	SAFE_NODEPTH,     // don't set depth bits
 	SAFE_NOCOLOR,     // don't set color bits
-	SAFE_DONTCARE     // ignore everything, let SDL/EGL decide
+	SAFE_DONTCARE,    // ignore everything, let SDL/EGL decide
+	SAFE_LAST,        // must be last
 } ref_safegl_context_t;
 
-// binary compatible with SDL2
 enum // OpenGL configuration attributes
 {
 	REF_GL_RED_SIZE,
 	REF_GL_GREEN_SIZE,
 	REF_GL_BLUE_SIZE,
 	REF_GL_ALPHA_SIZE,
-	REF_GL_BUFFER_SIZE,
 	REF_GL_DOUBLEBUFFER,
 	REF_GL_DEPTH_SIZE,
 	REF_GL_STENCIL_SIZE,
-	REF_GL_ACCUM_RED_SIZE,
-	REF_GL_ACCUM_GREEN_SIZE,
-	REF_GL_ACCUM_BLUE_SIZE,
-	REF_GL_ACCUM_ALPHA_SIZE,
-	REF_GL_STEREO,
 	REF_GL_MULTISAMPLEBUFFERS,
 	REF_GL_MULTISAMPLESAMPLES,
 	REF_GL_ACCELERATED_VISUAL,
-	REF_GL_RETAINED_BACKING,
 	REF_GL_CONTEXT_MAJOR_VERSION,
 	REF_GL_CONTEXT_MINOR_VERSION,
 	REF_GL_CONTEXT_EGL,
@@ -198,7 +191,8 @@ enum // OpenGL configuration attributes
 	REF_GL_FRAMEBUFFER_SRGB_CAPABLE,
 	REF_GL_CONTEXT_RELEASE_BEHAVIOR,
 	REF_GL_CONTEXT_RESET_NOTIFICATION,
-	REF_GL_CONTEXT_NO_ERROR
+	REF_GL_CONTEXT_NO_ERROR,
+	REF_GL_ATTRIBUTES_COUNT,
 };
 
 enum
@@ -208,6 +202,7 @@ enum
 	REF_GL_CONTEXT_PROFILE_ES             = 0x0004 /**< GLX_CONTEXT_ES2_PROFILE_BIT_EXT */
 };
 
+// binary compatible with SDL and EGL_KHR_create_context(0x0007 mask)
 enum
 {
 	REF_GL_CONTEXT_DEBUG_FLAG              = 0x0001,
@@ -215,6 +210,14 @@ enum
 	REF_GL_CONTEXT_ROBUST_ACCESS_FLAG      = 0x0004,
 	REF_GL_CONTEXT_RESET_ISOLATION_FLAG    = 0x0008
 };
+
+typedef enum ref_screen_rotation_e
+{
+	REF_ROTATE_NONE = 0,
+	REF_ROTATE_CW = 1,
+	REF_ROTATE_UD = 2,
+	REF_ROTATE_CCW = 3,
+} ref_screen_rotation_t;
 
 typedef struct remap_info_s
 {
@@ -272,7 +275,6 @@ typedef struct ref_api_s
 	void (*Cbuf_AddText)( const char *commands );
 	void (*Cbuf_InsertText)( const char *commands );
 	void (*Cbuf_Execute)( void );
-	void (*Cbuf_SetOpenGLConfigHack)( qboolean set ); // host.apply_opengl_config
 
 	// logging
 	void	(*Con_Printf)( const char *fmt, ... ); // typical console allowed messages
@@ -285,14 +287,14 @@ typedef struct ref_api_s
 	void	(*CL_CenterPrint)( const char *s, float y );
 	void (*Con_DrawStringLen)( const char *pText, int *length, int *height );
 	int (*Con_DrawString)( int x, int y, const char *string, rgba_t setColor );
-	void	(*CL_DrawCenterPrint)();
+	void	(*CL_DrawCenterPrint)( void );
 
 	// entity management
 	struct cl_entity_s *(*GetLocalPlayer)( void );
 	struct cl_entity_s *(*GetViewModel)( void );
 	struct cl_entity_s *(*GetEntityByIndex)( int idx );
 	struct cl_entity_s *(*R_BeamGetEntity)( int index );
-	struct cl_entity_s *(*CL_GetWaterEntity)( vec3_t p );
+	struct cl_entity_s *(*CL_GetWaterEntity)( const vec3_t p );
 	qboolean (*CL_AddVisibleEntity)( cl_entity_t *ent, int entityType );
 
 	// brushes
@@ -327,13 +329,12 @@ typedef struct ref_api_s
 
 	// remap
 	struct remap_info_s *(*CL_GetRemapInfoForEntity)( cl_entity_t *e );
-	void (*CL_AllocRemapInfo)( int topcolor, int bottomcolor );
+	void (*CL_AllocRemapInfo)( cl_entity_t *ent, int topcolor, int bottomcolor );
 	void (*CL_FreeRemapInfo)( struct remap_info_s *info );
-	void (*CL_UpdateRemapInfo)( int topcolor, int bottomcolor );
+	void (*CL_UpdateRemapInfo)( cl_entity_t *ent, int topcolor, int bottomcolor );
 
 	// utils
 	void  (*CL_ExtraUpdate)( void );
-	uint  (*COM_HashKey)( const char *strings, uint hashSize );
 	void  (*Host_Error)( const char *fmt, ... );
 	void  (*COM_SetRandomSeed)( int lSeed );
 	float (*COM_RandomFloat)( float rmin, float rmax );
@@ -341,7 +342,7 @@ typedef struct ref_api_s
 	struct screenfade_s *(*GetScreenFade)( void );
 	struct client_textmessage_s *(*pfnTextMessageGet)( const char *pName );
 	void (*GetPredictedOrigin)( vec3_t v );
-	byte *(*CL_GetPaletteColor)(int color); // clgame.palette[color]
+	color24 *(*CL_GetPaletteColor)(int color); // clgame.palette[color]
 	void (*CL_GetScreenInfo)( int *width, int *height ); // clgame.scrInfo, ptrs may be NULL
 	void (*SetLocalLightLevel)( int level ); // cl.local.light_level
 	int (*Sys_CheckParm)( const char *flag );
@@ -377,23 +378,24 @@ typedef struct ref_api_s
 	// video init
 	// try to create window
 	// will call GL_SetupAttributes in case of REF_GL
-	int	(*R_Init_Video)( int type );
+	qboolean  (*R_Init_Video)( int type ); // will also load and execute renderer config(see R_GetConfigName)
 	void (*R_Free_Video)( void );
 
 	// GL
 	int   (*GL_SetAttribute)( int attr, int value );
 	int   (*GL_GetAttribute)( int attr, int *value );
 	void *(*GL_GetProcAddress)( const char *name );
-	void (*GL_SwapBuffers)();
+	void (*GL_SwapBuffers)( void );
 
 	// SW
 	qboolean (*SW_CreateBuffer)( int width, int height, uint *stride, uint *bpp, uint *r, uint *g, uint *b );
-	void *(*SW_LockBuffer)();
-	void (*SW_UnlockBuffer)();
+	void *(*SW_LockBuffer)( void );
+	void (*SW_UnlockBuffer)( void );
 
 	// gamma
 	void (*BuildGammaTable)( float lightgamma, float brightness );
 	byte		(*LightToTexGamma)( byte color );	// software gamma support
+	qboolean	(*R_DoResetGamma)( void );
 
 	// renderapi
 	lightstyle_t*	(*GetLightStyle)( int number );
@@ -440,10 +442,11 @@ typedef struct ref_interface_s
 	qboolean (*R_Init)( void ); // context is true if you need context management
 	// const char *(*R_GetInitError)( void );
 	void (*R_Shutdown)( void );
+	const char *(*R_GetConfigName)( void ); // returns config name without extension
+	qboolean (*R_SetDisplayTransform)( ref_screen_rotation_t rotate, int x, int y, float scale_x, float scale_y );
 
 	// only called for GL contexts
 	void (*GL_SetupAttributes)( int safegl );
-	void (*GL_OnContextCreated)( void );
 	void (*GL_InitExtensions)( void );
 	void (*GL_ClearExtensions)( void );
 
@@ -465,7 +468,6 @@ typedef struct ref_interface_s
 
 	// debug
 	void (*R_ShowTextures)( void );
-	void (*R_ShowTree)( void );
 
 	// texture management
 	const byte *(*R_GetTextureOriginalBuffer)( unsigned int idx ); // not always available
@@ -570,7 +572,7 @@ typedef struct ref_interface_s
 	struct mstudiotex_s *( *StudioGetTexture )( struct cl_entity_s *e );
 
 	// passed through R_RenderFrame (0 - use engine renderer, 1 - use custom client renderer)
-	int		(*GL_RenderFrame)( const struct ref_viewpass_s *rvp );
+	void		(*GL_RenderFrame)( const struct ref_viewpass_s *rvp );
 	// setup map bounds for ortho-projection when we in dev_overview mode
 	void		(*GL_OrthoBounds)( const float *mins, const float *maxs );
 	// grab r_speeds message
@@ -581,6 +583,8 @@ typedef struct ref_interface_s
 	void		(*R_NewMap)( void );
 	// clear the render entities before each frame
 	void		(*R_ClearScene)( void );
+	// GL_GetProcAddress for client renderer
+	void*		(*R_GetProcAddress)( const char *name );
 
 	// TriAPI Interface
 	// NOTE: implementation isn't required to be compatible
@@ -613,9 +617,12 @@ typedef struct ref_interface_s
 	void	(*VGUI_DrawQuad)( const vpoint_t *ul, const vpoint_t *lr );
 	void	(*VGUI_GetTextureSizes)( int *width, int *height );
 	int		(*VGUI_GenerateTexture)( void );
-
 } ref_interface_t;
 
 typedef int (*REFAPI)( int version, ref_interface_t *pFunctionTable, ref_api_t* engfuncs, ref_globals_t *pGlobals );
+#define GET_REF_API "GetRefAPI"
+
+typedef void (*REF_HUMANREADABLE_NAME)( char *out, size_t len );
+#define GET_REF_HUMANREADABLE_NAME "GetRefHumanReadableName"
 
 #endif // REF_API

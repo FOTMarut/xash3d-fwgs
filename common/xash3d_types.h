@@ -48,10 +48,10 @@ typedef integer64 longtime_t;
 #define MAX_MODS		512	// environment games that engine can keep visible
 #define MAX_USERMSG_LENGTH	2048	// don't modify it's relies on a client-side definitions
 
-#define BIT( n )		( 1 << ( n ))
-#define GAMMA		( 2.2 )		// Valve Software gamma
-#define INVGAMMA		( 1.0 / 2.2 )	// back to 1.0
-#define TEXGAMMA		( 0.9 )		// compensate dim textures
+#define BIT( n )		( 1U << ( n ))
+#define GAMMA		( 2.2f )		// Valve Software gamma
+#define INVGAMMA		( 1.0f / 2.2f )	// back to 1.0
+#define TEXGAMMA		( 0.9f )		// compensate dim textures
 #define SetBits( iBitVector, bits )	((iBitVector) = (iBitVector) | (bits))
 #define ClearBits( iBitVector, bits )	((iBitVector) = (iBitVector) & ~(bits))
 #define FBitSet( iBitVector, bit )	((iBitVector) & (bit))
@@ -137,12 +137,18 @@ typedef struct dll_info_s
 	void		*link;	// hinstance of loading library
 } dll_info_t;
 
-typedef void (*setpair_t)( const char *key, const char *value, void *buffer, void *numpairs );
+typedef void (*setpair_t)( const char *key, const void *value, void *buffer, void *numpairs );
 
 // config strings are a general means of communication from
 // the server to all connected clients.
 // each config string can be at most CS_SIZE characters.
+#if XASH_LOW_MEMORY == 0
 #define MAX_QPATH		64	// max length of a game pathname
+#elif XASH_LOW_MEMORY == 2
+#define MAX_QPATH		32 // should be enough for singleplayer
+#elif XASH_LOW_MEMORY == 1
+#define MAX_QPATH 48
+#endif
 #define MAX_OSPATH		260	// max length of a filesystem pathname
 #define CS_SIZE		64	// size of one config string
 #define CS_TIME		16	// size of time string

@@ -19,6 +19,9 @@ GNU General Public License for more details.
 #include "beamdef.h"
 #include "particledef.h"
 #include "entity_types.h"
+#if HAVE_TGMATH_H
+#include <tgmath.h>
+#endif
 
 #define IsLiquidContents( cnt )	( cnt == CONTENTS_WATER || cnt == CONTENTS_SLIME || cnt == CONTENTS_LAVA )
 
@@ -41,18 +44,14 @@ static int R_RankForRenderMode( int rendermode )
 
 void R_AllowFog( qboolean allowed )
 {
-	static int	isFogEnabled;
-
 	if( allowed )
 	{
-		if( isFogEnabled )
+		if( glState.isFogEnabled )
 			pglEnable( GL_FOG );
 	}
 	else
 	{
-		isFogEnabled = pglIsEnabled( GL_FOG );
-
-		if( isFogEnabled )
+		if( glState.isFogEnabled )
 			pglDisable( GL_FOG );
 	}
 }
@@ -78,7 +77,7 @@ R_TransEntityCompare
 Sorting translucent entities by rendermode then by distance
 ===============
 */
-static int R_TransEntityCompare( const cl_entity_t **a, const cl_entity_t **b )
+static int R_TransEntityCompare( const void *a, const void *b )
 {
 	cl_entity_t	*ent1, *ent2;
 	vec3_t		vecLen, org;
@@ -86,8 +85,8 @@ static int R_TransEntityCompare( const cl_entity_t **a, const cl_entity_t **b )
 	int		rendermode1;
 	int		rendermode2;
 
-	ent1 = (cl_entity_t *)*a;
-	ent2 = (cl_entity_t *)*b;
+	ent1 = *(cl_entity_t **)a;
+	ent2 = *(cl_entity_t **)b;
 	rendermode1 = R_GetEntityRenderMode( ent1 );
 	rendermode2 = R_GetEntityRenderMode( ent2 );
 
@@ -344,8 +343,8 @@ void R_SetupFrustum( void )
 
 	if( RP_NORMALPASS() && ( ENGINE_GET_PARM( PARM_WATER_LEVEL ) >= 3 ))
 	{
-		RI.fov_x = atan( tan( DEG2RAD( RI.fov_x ) / 2 ) * ( 0.97 + sin( gpGlobals->time * 1.5 ) * 0.03 )) * 2 / (M_PI / 180.0);
-		RI.fov_y = atan( tan( DEG2RAD( RI.fov_y ) / 2 ) * ( 1.03 - sin( gpGlobals->time * 1.5 ) * 0.03 )) * 2 / (M_PI / 180.0);
+		RI.fov_x = atan( tan( DEG2RAD( RI.fov_x ) / 2 ) * ( 0.97f + sin( gpGlobals->time * 1.5f ) * 0.03f )) * 2 / (M_PI_F / 180.0f);
+		RI.fov_y = atan( tan( DEG2RAD( RI.fov_y ) / 2 ) * ( 1.03f - sin( gpGlobals->time * 1.5f ) * 0.03f )) * 2 / (M_PI_F / 180.0f);
 	}
 
 	// build the transformation matrix for the given view angles
@@ -371,7 +370,7 @@ R_SetupProjectionMatrix
 */
 static void R_SetupProjectionMatrix( matrix4x4 m )
 {
-	GLdouble	xMin, xMax, yMin, yMax, zNear, zFar;
+	GLfloat	xMin, xMax, yMin, yMax, zNear, zFar;
 
 	if( RI.drawOrtho )
 	{
@@ -385,10 +384,10 @@ static void R_SetupProjectionMatrix( matrix4x4 m )
 	zNear = 4.0f;
 	zFar = max( 256.0f, RI.farClip );
 
-	yMax = zNear * tan( RI.fov_y * M_PI / 360.0 );
+	yMax = zNear * tan( RI.fov_y * M_PI_F / 360.0f );
 	yMin = -yMax;
 
-	xMax = zNear * tan( RI.fov_x * M_PI / 360.0 );
+	xMax = zNear * tan( RI.fov_x * M_PI_F / 360.0f );
 	xMin = -xMax;
 
 	Matrix4x4_CreateProjection( m, xMax, xMin, yMax, yMin, zNear, zFar );
@@ -497,6 +496,9 @@ static void R_SetupFrame( void )
 {
 	// setup viewplane dist
 	RI.viewplanedist = DotProduct( RI.vieworg, RI.vforward );
+
+	// NOTE: this request is the fps-killer on some NVidia drivers
+	glState.isFogEnabled = pglIsEnabled( GL_FOG );
 
 	if( !gl_nosort->value )
 	{
@@ -701,7 +703,11 @@ static void R_CheckFog( void )
 			// in some cases waterlevel jumps from 3 to 1. Catch it
 			RI.cached_waterlevel = ENGINE_GET_PARM( PARM_WATER_LEVEL );
 			RI.cached_contents = CONTENTS_EMPTY;
-			if( !RI.fogCustom ) pglDisable( GL_FOG );
+			if( !RI.fogCustom )
+			{
+				glState.isFogEnabled = false;
+				pglDisable( GL_FOG );
+			}
 		}
 		return;
 	}
@@ -983,37 +989,27 @@ void R_RenderScene( void )
 
 /*
 ===============
-R_DoResetGamma
-
-gamma will be reset for
-some type of screenshots
+R_CheckGamma
 ===============
 */
-qboolean R_DoResetGamma( void )
+void R_CheckGamma( void )
 {
-	// FIXME: this looks ugly. apply the backward gamma changes to the output image
-	return false;
-#if 0
-	switch( cls.scrshot_action )
+	if( gEngfuncs.R_DoResetGamma( ))
 	{
-	case scrshot_normal:
-		if( CL_IsDevOverviewMode( ))
-			return true;
-		return false;
-	case scrshot_snapshot:
-		if( CL_IsDevOverviewMode( ))
-			return true;
-		return false;
-	case scrshot_plaque:
-	case scrshot_savegame:
-	case scrshot_envshot:
-	case scrshot_skyshot:
-	case scrshot_mapshot:
-		return true;
-	default:
-		return false;
+		// paranoia cubemaps uses this
+		gEngfuncs.BuildGammaTable( 1.8f, 0.0f );
+
+		// paranoia cubemap rendering
+		if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
+			gEngfuncs.drawFuncs->GL_BuildLightmaps( );
 	}
-#endif
+	else if( FBitSet( vid_gamma->flags, FCVAR_CHANGED ) || FBitSet( vid_brightness->flags, FCVAR_CHANGED ))
+	{
+		gEngfuncs.BuildGammaTable( vid_gamma->value, vid_brightness->value );
+		glConfig.softwareGammaUpdate = true;
+		GL_RebuildLightmaps();
+		glConfig.softwareGammaUpdate = false;
+	}
 }
 
 /*
@@ -1031,24 +1027,7 @@ void R_BeginFrame( qboolean clearScene )
 		pglClear( GL_COLOR_BUFFER_BIT );
 	}
 
-	if( R_DoResetGamma( ))
-	{
-		gEngfuncs.BuildGammaTable( 1.8f, 0.0f );
-		glConfig.softwareGammaUpdate = true;
-		GL_RebuildLightmaps();
-		glConfig.softwareGammaUpdate = false;
-
-		// next frame will be restored gamma
-		SetBits( vid_brightness->flags, FCVAR_CHANGED );
-		SetBits( vid_gamma->flags, FCVAR_CHANGED );
-	}
-	else if( FBitSet( vid_gamma->flags, FCVAR_CHANGED ) || FBitSet( vid_brightness->flags, FCVAR_CHANGED ))
-	{
-		gEngfuncs.BuildGammaTable( vid_gamma->value, vid_brightness->value );
-		glConfig.softwareGammaUpdate = true;
-		GL_RebuildLightmaps();
-		glConfig.softwareGammaUpdate = false;
-	}
+	R_CheckGamma();
 
 	R_Set2DMode( true );
 
@@ -1100,10 +1079,10 @@ void R_SetupRefParams( const ref_viewpass_t *rvp )
 R_RenderFrame
 ===============
 */
-int R_RenderFrame( const ref_viewpass_t *rvp )
+void R_RenderFrame( const ref_viewpass_t *rvp )
 {
 	if( r_norefresh->value )
-		return 1;
+		return;
 
 	// setup the initial render params
 	R_SetupRefParams( rvp );
@@ -1129,7 +1108,7 @@ int R_RenderFrame( const ref_viewpass_t *rvp )
 			R_GatherPlayerLight();
 			tr.realframecount++;
 			tr.fResetVis = true;
-			return 1;
+			return;
 		}
 	}
 
@@ -1140,7 +1119,7 @@ int R_RenderFrame( const ref_viewpass_t *rvp )
 	tr.realframecount++; // right called after viewmodel events
 	R_RenderScene();
 
-	return 1;
+	return;
 }
 
 /*

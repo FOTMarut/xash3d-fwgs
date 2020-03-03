@@ -12,7 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */ 
-#ifdef XASH_DEDICATED
+#if XASH_DEDICATED
 #include "common.h"
 #include "mathlib.h"
 #include "ref_api.h"
@@ -92,7 +92,7 @@ void CL_ProcessFile( qboolean successfully_received, const char *filename )
 
 }
 
-int CL_Active( void )
+int GAME_EXPORT CL_Active( void )
 {
 	return false;
 }
@@ -148,32 +148,32 @@ qboolean CL_IsBackgroundMap( void )
 	return false;
 }
 
-void CL_Init()
+void CL_Init( void )
 {
 
 }
 
-void Key_Init()
+void Key_Init( void )
 {
 
 }
 
-void IN_Init()
+void IN_Init( void )
 {
 
 }
 
-void CL_Drop()
+void CL_Drop( void )
 {
 
 }
 
-void CL_ClearEdicts()
+void CL_ClearEdicts( void )
 {
 
 }
 
-void Key_SetKeyDest(int key_dest)
+void GAME_EXPORT Key_SetKeyDest(int key_dest)
 {
 
 }
@@ -183,37 +183,37 @@ void UI_SetActiveMenu( qboolean fActive )
 
 }
 
-void CL_WriteMessageHistory()
+void CL_WriteMessageHistory( void )
 {
 
 }
 
-void Host_ClientBegin()
+void Host_ClientBegin( void )
 {
 
 }
 
-void Host_ClientFrame()
+void Host_ClientFrame( void )
 {
 
 }
 
-void Host_InputFrame()
+void Host_InputFrame( void )
 {
-	Cbuf_Execute();
+	Cbuf_Execute( );
 }
 
-void VID_InitDefaultResolution()
-{
-	
-}
-
-void Con_Init()
+void VID_InitDefaultResolution( void )
 {
 	
 }
 
-void R_ClearAllDecals()
+void Con_Init( void )
+{
+	
+}
+
+void R_ClearAllDecals( void )
 {
 
 }
@@ -222,7 +222,7 @@ int R_CreateDecalList( struct decallist_s *pList )
 	return 0;
 }
 
-void S_StopSound(int entnum, int channel, const char *soundname)
+void GAME_EXPORT S_StopSound(int entnum, int channel, const char *soundname)
 {
 
 }
@@ -232,47 +232,42 @@ int S_GetCurrentStaticSounds( soundlist_t *pout, int size )
 	return 0;
 }
 
-int CL_GetMaxClients()
+int GAME_EXPORT CL_GetMaxClients( void )
 {
 	return 0;
 }
 
-void IN_TouchInitConfig()
+void IN_TouchInitConfig( void )
 {
 
 }
 
-void CL_Disconnect()
+void CL_Disconnect( void )
 {
 
 }
 
-void CL_Shutdown()
+void CL_Shutdown( void )
 {
 
 }
 
-void R_ClearStaticEntities()
+void R_ClearStaticEntities( void )
 {
 
 }
 
-void Host_Credits()
+void Host_Credits( void )
 {
 
 }
 
-qboolean UI_CreditsActive()
+qboolean UI_CreditsActive( void )
 {
 	return false;
 }
 
-void GL_FreeImage( const char *name )
-{
-
-}
-
-void S_StopBackgroundTrack()
+void S_StopBackgroundTrack( void )
 {
 
 }
@@ -292,12 +287,12 @@ void S_StopAllSounds( qboolean ambient )
 
 }
 
-void Con_NPrintf( int idx, const char *fmt, ... )
+void GAME_EXPORT Con_NPrintf( int idx, const char *fmt, ... )
 {
 
 }
 
-void Con_NXPrintf( struct  con_nprint_s *info, const char *fmt, ... )
+void GAME_EXPORT Con_NXPrintf( struct  con_nprint_s *info, const char *fmt, ... )
 {
 
 }
@@ -307,12 +302,12 @@ const byte *GL_TextureData( unsigned int texnum )
 	return NULL;
 }
 
-void SCR_CheckStartupVids()
+void SCR_CheckStartupVids( void )
 {
 
 }
 
-void Sys_SetClipboardData( const byte *text, size_t size )
+void Sys_SetClipboardData( const char *text, size_t size )
 {
 
 }
@@ -325,6 +320,15 @@ void CL_StopPlayback( void )
 void CL_ClearStaticEntities( void )
 {
 
+}
+
+void UI_ShowConnectionWarning( void )
+{
+
+}
+
+void CL_Crashed( void )
+{
 }
 
 #endif // XASH_DEDICATED

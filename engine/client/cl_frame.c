@@ -101,7 +101,7 @@ qboolean CL_EntityTeleported( cl_entity_t *ent )
 	VectorSubtract( ent->curstate.origin, ent->prevstate.origin, delta );
 
 	// compute potential max movement in units per frame and compare with entity movement
-	maxlen = ( clgame.movevars.maxvelocity * ( 1.0 / GAME_FPS ));
+	maxlen = ( clgame.movevars.maxvelocity * ( 1.0f / GAME_FPS ));
 	len = VectorLength( delta );
 
 	return (len > maxlen);
@@ -223,6 +223,10 @@ void CL_UpdateLatchedVars( cl_entity_t *ent )
 
 	memcpy( ent->latched.prevcontroller, ent->prevstate.controller, sizeof( ent->latched.prevcontroller ));
 	memcpy( ent->latched.prevblending, ent->prevstate.blending, sizeof( ent->latched.prevblending ));
+
+	// update custom latched vars
+	if( clgame.drawFuncs.CL_UpdateLatchedVars != NULL )
+		clgame.drawFuncs.CL_UpdateLatchedVars( ent, false );
 }
 
 /*
@@ -280,6 +284,10 @@ void CL_ResetLatchedVars( cl_entity_t *ent, qboolean full_reset )
 	VectorCopy( ent->curstate.origin, ent->latched.prevorigin );
 	VectorCopy( ent->curstate.angles, ent->latched.prevangles );
 	ent->latched.prevsequence = ent->curstate.sequence;
+
+	// update custom latched vars
+	if( clgame.drawFuncs.CL_UpdateLatchedVars != NULL )
+		clgame.drawFuncs.CL_UpdateLatchedVars( ent, true );
 }
 
 /*
@@ -348,7 +356,7 @@ qboolean CL_FindInterpolationUpdates( cl_entity_t *ent, float targettime, positi
 	for( i = 1; i < HISTORY_MAX - 1; i++ )
 	{
 		at = ent->ph[( imod - i ) & HISTORY_MASK].animtime;
-		if( at == 0.0 ) break;
+		if( at == 0.0f ) break;
 
 		if( targettime > at )
 		{
@@ -1356,7 +1364,7 @@ qboolean CL_GetEntitySpatialization( channel_t *ch )
 		return true;
 	}
 
-	valid_origin = VectorIsNull( ch->origin ) ? false : true;          
+	valid_origin = VectorIsNull( ch->origin ) ? false : true;
 	ent = CL_GetEntityByIndex( ch->entnum );
 
 	// entity is not present on the client but has valid origin
@@ -1368,19 +1376,9 @@ qboolean CL_GetEntitySpatialization( channel_t *ch )
 	if( ent->curstate.messagenum != cl.parsecount )
 		return valid_origin;
 #endif
-	ch->movetype = ent->curstate.movetype;
-
 	// setup origin
 	VectorAverage( ent->curstate.mins, ent->curstate.maxs, ch->origin );
 	VectorAdd( ch->origin, ent->curstate.origin, ch->origin );
-
-	// setup mins\maxs
-	VectorAdd( ent->curstate.mins, ent->curstate.origin, ch->absmin );
-	VectorAdd( ent->curstate.maxs, ent->curstate.origin, ch->absmax );
-
-	// setup radius
-	if( ent->model != NULL && ent->model->radius ) ch->radius = ent->model->radius;
-	else ch->radius = RadiusFromBounds( ent->curstate.mins, ent->curstate.maxs );
 
 	return true;
 }
@@ -1390,7 +1388,7 @@ qboolean CL_GetMovieSpatialization( rawchan_t *ch )
 	cl_entity_t	*ent;
 	qboolean		valid_origin;
 
-	valid_origin = VectorIsNull( ch->origin ) ? false : true;          
+	valid_origin = VectorIsNull( ch->origin ) ? false : true;
 	ent = CL_GetEntityByIndex( ch->entnum );
 
 	// entity is not present on the client but has valid origin

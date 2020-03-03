@@ -32,7 +32,11 @@ GNU General Public License for more details.
 //=============================================================================
 
 #define SV_UPDATE_MASK	(SV_UPDATE_BACKUP - 1)
+#if XASH_LOW_MEMORY == 2
+#define SV_UPDATE_BACKUP SINGLEPLAYER_BACKUP
+#else
 extern int SV_UPDATE_BACKUP;
+#endif
 
 // hostflags
 #define SVF_SKIPLOCALHOST	BIT( 0 )
@@ -209,7 +213,7 @@ typedef struct sv_client_s
 	char		physinfo[MAX_INFO_STRING];	// set on server (transmit to client)
 
 	netchan_t		netchan;
-	int		chokecount;         	// number of messages rate supressed
+	int		chokecount;			// number of messages rate supressed
 	int		delta_sequence;		// -1 = no compression.
 
 	double		next_messagetime;		// time when we should send next world state update  
@@ -253,6 +257,7 @@ typedef struct sv_client_s
 	int		challenge;		// challenge of this user, randomly generated
 	int		userid;			// identifying number on server
 	int		extensions;
+	char		useragent[MAX_INFO_STRING];
 } sv_client_t;
 
 /*
@@ -264,7 +269,6 @@ typedef struct sv_client_s
  a program error, like an overflowed reliable buffer
 =============================================================================
 */
-
 // MAX_CHALLENGES is made large to prevent a denial
 // of service attack that could cycle all of them
 // out before legitimate users connected
@@ -458,6 +462,8 @@ void SV_ProcessFile( sv_client_t *cl, const char *filename );
 void SV_SendResource( resource_t *pResource, sizebuf_t *msg );
 void SV_SendResourceList( sv_client_t *cl );
 void SV_AddToMaster( netadr_t from, sizebuf_t *msg );
+qboolean SV_ProcessUserAgent( netadr_t from, const char *useragent );
+void Host_SetServerState( int state );
 qboolean SV_IsSimulating( void );
 qboolean SV_InitGame( void );
 void SV_FreeClients( void );
@@ -511,10 +517,11 @@ void SV_BroadcastCommand( const char *fmt, ... ) _format( 1 );
 char *SV_StatusString( void );
 void SV_RefreshUserinfo( void );
 void SV_GetChallenge( netadr_t from );
-void SV_DirectConnect( netadr_t from );
 void SV_TogglePause( const char *msg );
 qboolean SV_ShouldUpdatePing( sv_client_t *cl );
 const char *SV_GetClientIDString( sv_client_t *cl );
+sv_client_t *SV_ClientById( int id );
+sv_client_t *SV_ClientByName( const char *name );
 void SV_FullClientUpdate( sv_client_t *cl, sizebuf_t *msg );
 void SV_FullUpdateMovevars( sv_client_t *cl, sizebuf_t *msg );
 void SV_GetPlayerStats( sv_client_t *cl, int *ping, int *packet_loss );
@@ -531,6 +538,7 @@ int SV_CalcPing( sv_client_t *cl );
 void SV_InitClientMove( void );
 void SV_UpdateServerInfo( void );
 void SV_EndRedirect( void );
+void SV_RejectConnection( netadr_t from, char *fmt, ... ) _format( 2 );
 
 //
 // sv_cmds.c
@@ -553,6 +561,14 @@ void SV_SendResources( sv_client_t *cl, sizebuf_t *msg );
 void SV_ClearResourceLists( sv_client_t *cl );
 void SV_TransferConsistencyInfo( void );
 void SV_RequestMissingResources( void );
+
+//
+// sv_filter.c
+//
+void SV_InitFilter( void );
+void SV_ShutdownFilter( void );
+qboolean SV_CheckIP( netadr_t *adr );
+qboolean SV_CheckID( const char *id );
 
 //
 // sv_frame.c

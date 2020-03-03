@@ -35,7 +35,7 @@ _inline int BitByte( int bits )
 	return PAD_NUMBER( bits, 8 ) >> 3;
 }
 
-typedef struct sizebuf_s
+struct sizebuf_s
 {
 	qboolean		bOverflow;	// overflow reading or writing
 	const char	*pDebugName;	// buffer name (pointer to const name)
@@ -43,7 +43,7 @@ typedef struct sizebuf_s
 	byte		*pData;
 	int		iCurBit;
 	int		nDataBits;
-} sizebuf_t;
+};
 
 #define MSG_StartReading			MSG_StartWriting
 #define MSG_GetNumBytesRead			MSG_GetNumBytesWritten
@@ -73,7 +73,7 @@ void MSG_Clear( sizebuf_t *sb );
 void MSG_WriteOneBit( sizebuf_t *sb, int nValue );
 void MSG_WriteUBitLong( sizebuf_t *sb, uint curData, int numbits );
 void MSG_WriteSBitLong( sizebuf_t *sb, int data, int numbits );
-void MSG_WriteBitLong( sizebuf_t *sb, uint data, int numbits, qboolean bSigned );
+void MSG_WriteBitLong( sizebuf_t *sb, int data, int numbits, qboolean bSigned );
 qboolean MSG_WriteBits( sizebuf_t *sb, const void *pData, int nBits );
 void MSG_WriteBitAngle( sizebuf_t *sb, float fAngle, int numbits );
 void MSG_WriteBitFloat( sizebuf_t *sb, float val );

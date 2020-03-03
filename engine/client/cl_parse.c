@@ -21,9 +21,9 @@ GNU General Public License for more details.
 #include "shake.h"
 #include "hltv.h"
 #include "input.h"
-
+#if XASH_LOW_MEMORY != 2
 int CL_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
-
+#endif
 /*
 ===============
 CL_UserMsgStub
@@ -92,7 +92,7 @@ void CL_ParseSoundPacket( sizebuf_t *msg )
 		char	sentenceName[32];
 
 		if( FBitSet( flags, SND_SEQUENCE ))
-			Q_snprintf( sentenceName, sizeof( sentenceName ), "!#%i", sound + MAX_SOUNDS );
+			Q_snprintf( sentenceName, sizeof( sentenceName ), "!#%i", sound + MAX_SOUNDS_NONSENTENCE );
 		else Q_snprintf( sentenceName, sizeof( sentenceName ), "!%i", sound );
 
 		handle = S_RegisterSound( sentenceName );
@@ -156,7 +156,7 @@ void CL_ParseRestoreSoundPacket( sizebuf_t *msg )
 		char	sentenceName[32];
 
 		if( flags & SND_SEQUENCE )
-			Q_snprintf( sentenceName, sizeof( sentenceName ), "!%i", sound + MAX_SOUNDS );
+			Q_snprintf( sentenceName, sizeof( sentenceName ), "!%i", sound + MAX_SOUNDS_NONSENTENCE );
 		else Q_snprintf( sentenceName, sizeof( sentenceName ), "!%i", sound );
 
 		handle = S_RegisterSound( sentenceName );
@@ -360,7 +360,7 @@ CL_WeaponAnim
 Set new weapon animation
 ==================
 */
-void CL_WeaponAnim( int iAnim, int body )
+void GAME_EXPORT CL_WeaponAnim( int iAnim, int body )
 {
 	cl_entity_t	*view = &clgame.viewent;
 
@@ -528,6 +528,9 @@ void CL_BatchResourceRequest( qboolean initialize )
 				break;
 			CL_MoveToOnHandList( p );
 			break;
+		case t_world:
+			ASSERT( 0 );
+			break;
 		}
 	}
 
@@ -551,23 +554,20 @@ int CL_EstimateNeededResources( void )
 {
 	resource_t	*p;
 	int		nTotalSize = 0;
-	int		nSize;
 
 	for( p = cl.resourcesneeded.pNext; p != &cl.resourcesneeded; p = p->pNext )
 	{
 		switch( p->type )
 		{
 		case t_sound:
-			nSize = FS_FileSize( va( "%s%s", DEFAULT_SOUNDPATH, p->szFileName ), false );
-			if( p->szFileName[0] != '*' && nSize == -1 )
+			if( p->szFileName[0] != '*' && !FS_FileExists( va( "%s%s", DEFAULT_SOUNDPATH, p->szFileName ), false ) )
 			{
 				SetBits( p->ucFlags, RES_WASMISSING );
 				nTotalSize += p->nDownloadSize;
 			}
 			break;
 		case t_model:
-			nSize = FS_FileSize( p->szFileName, false );
-			if( p->szFileName[0] != '*' && nSize == -1 )
+			if( p->szFileName[0] != '*' && !FS_FileExists( p->szFileName, false ) )
 			{
 				SetBits( p->ucFlags, RES_WASMISSING );
 				nTotalSize += p->nDownloadSize;
@@ -576,8 +576,7 @@ int CL_EstimateNeededResources( void )
 		case t_skin:
 		case t_generic:
 		case t_eventscript:
-			nSize = FS_FileSize( p->szFileName, false );
-			if( nSize == -1 )
+			if( !FS_FileExists( p->szFileName, false ) )
 			{
 				SetBits( p->ucFlags, RES_WASMISSING );
 				nTotalSize += p->nDownloadSize;
@@ -590,7 +589,10 @@ int CL_EstimateNeededResources( void )
 				nTotalSize += p->nDownloadSize;
 			}
 			break;
-		}		
+		case t_world:
+			ASSERT( 0 );
+			break;
+		}
 	}
 
 	return nTotalSize;
@@ -879,7 +881,7 @@ void CL_ParseServerData( sizebuf_t *msg )
 	cl.playernum = MSG_ReadByte( msg );
 	cl.maxclients = MSG_ReadByte( msg );
 	clgame.maxEntities = MSG_ReadWord( msg );
-	clgame.maxEntities = bound( 600, clgame.maxEntities, MAX_EDICTS );
+	clgame.maxEntities = bound( MIN_EDICTS, clgame.maxEntities, MAX_EDICTS );
 	clgame.maxModels = MSG_ReadWord( msg );
 	Q_strncpy( clgame.mapname, MSG_ReadString( msg ), MAX_STRING );
 	Q_strncpy( clgame.maptitle, MSG_ReadString( msg ), MAX_STRING );
@@ -1409,6 +1411,36 @@ void CL_ParseResource( sizebuf_t *msg )
 	if( MSG_ReadOneBit( msg ))
 		MSG_ReadBytes( msg, pResource->rguc_reserved, sizeof( pResource->rguc_reserved ));
 
+	if( pResource->type == t_sound && pResource->nIndex > MAX_SOUNDS )
+	{
+		Mem_Free( pResource );
+		Host_Error( "bad sound index\n" );
+	}
+
+	if( pResource->type == t_model && pResource->nIndex > MAX_MODELS )
+	{
+		Mem_Free( pResource );
+		Host_Error( "bad model index\n" );
+	}
+
+	if( pResource->type == t_eventscript && pResource->nIndex > MAX_EVENTS )
+	{
+		Mem_Free( pResource );
+		Host_Error( "bad event index\n" );
+	}
+
+	if( pResource->type == t_generic && pResource->nIndex > MAX_CUSTOM )
+	{
+		Mem_Free( pResource );
+		Host_Error( "bad file index\n" );
+	}
+
+	if( pResource->type == t_decal && pResource->nIndex > MAX_DECALS )
+	{
+		Mem_Free( pResource );
+		Host_Error( "bad decal index\n" );
+	}
+
 	CL_AddToResourceList( pResource, &cl.resourcesneeded );
 }
 
@@ -1515,7 +1547,7 @@ void CL_RegisterResources( sizebuf_t *msg )
 	model_t	*mod;
 	int	i;
 
-	if( cls.dl.custom || cls.signon == SIGNONS && cls.state == ca_active )
+	if( cls.dl.custom || ( cls.signon == SIGNONS && cls.state == ca_active ) )
 	{
 		cls.dl.custom = false;
 		return;
@@ -1532,7 +1564,7 @@ void CL_RegisterResources( sizebuf_t *msg )
 		ASSERT( clgame.entities != NULL );
 		clgame.entities->model = cl.worldmodel;
 
-		if( cls.state != ca_disconnected )
+		if( !cl.video_prepped && !cl.audio_prepped )
 		{
 			Con_Printf( "Setting up renderer...\n" );
 
@@ -1702,7 +1734,7 @@ CL_ParseResLocation
 */
 void CL_ParseResLocation( sizebuf_t *msg )
 {
-	const char	*data = MSG_ReadString( msg );
+	char *data = MSG_ReadString( msg );
 	char token[256];
 
 	if( Q_strlen( data ) > 256 )
@@ -2392,7 +2424,7 @@ void CL_ParseLegacyServerData( sizebuf_t *msg )
 	cl.playernum = MSG_ReadByte( msg );
 	cl.maxclients = MSG_ReadByte( msg );
 	clgame.maxEntities = MSG_ReadWord( msg );
-	clgame.maxEntities = bound( 600, clgame.maxEntities, 4096 );
+	clgame.maxEntities = bound( 30, clgame.maxEntities, 4096 );
 	clgame.maxModels = 512;
 	Q_strncpy( clgame.mapname, MSG_ReadString( msg ), MAX_STRING );
 	Q_strncpy( clgame.maptitle, MSG_ReadString( msg ), MAX_STRING );
@@ -2722,7 +2754,13 @@ void CL_LegacyUpdateUserinfo( sizebuf_t *msg )
 	}
 	else memset( player, 0, sizeof( *player ));
 }
-
+#if XASH_LOW_MEMORY == 0
+#define MAX_LEGACY_RESOURCES 2048
+#elif XASH_LOW_MEMORY == 2
+#define MAX_LEGACY_RESOURCES 1
+#elif XASH_LOW_MEMORY == 1
+#define MAX_LEGACY_RESOURCES 512
+#endif
 /*
 ==============
 CL_ParseResourceList
@@ -2736,17 +2774,20 @@ void CL_LegacyParseResourceList( sizebuf_t *msg )
 	static struct
 	{
 		int  rescount;
-		int  restype[MAX_RESOURCES];
-		char resnames[MAX_RESOURCES][CS_SIZE];
+		int  restype[MAX_LEGACY_RESOURCES];
+		char resnames[MAX_LEGACY_RESOURCES][MAX_QPATH];
 	} reslist;
 	memset( &reslist, 0, sizeof( reslist ));
 
 	reslist.rescount = MSG_ReadWord( msg ) - 1;
 
+	if( reslist.rescount > MAX_LEGACY_RESOURCES )
+		Host_Error("MAX_RESOURCES reached\n");
+
 	for( i = 0; i < reslist.rescount; i++ )
 	{
 		reslist.restype[i] = MSG_ReadWord( msg );
-		Q_strncpy( reslist.resnames[i], MSG_ReadString( msg ), CS_SIZE );
+		Q_strncpy( reslist.resnames[i], MSG_ReadString( msg ), MAX_QPATH );
 	}
 
 	if( CL_IsPlaybackDemo() )

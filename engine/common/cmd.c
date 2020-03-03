@@ -473,7 +473,7 @@ static cmd_t		*cmd_functions;			// possible commands to execute
 Cmd_Argc
 ============
 */
-int Cmd_Argc( void )
+int GAME_EXPORT Cmd_Argc( void )
 {
 	return cmd_argc;
 }
@@ -686,7 +686,7 @@ void Cmd_AddRestrictedCommand( const char *cmd_name, xcommand_t function, const 
 Cmd_AddServerCommand
 ============
 */
-void Cmd_AddServerCommand( const char *cmd_name, xcommand_t function )
+void GAME_EXPORT Cmd_AddServerCommand( const char *cmd_name, xcommand_t function )
 {
 	Cmd_AddCommandEx( __FUNCTION__, cmd_name, function, "server command", CMD_SERVERDLL );
 }
@@ -696,7 +696,7 @@ void Cmd_AddServerCommand( const char *cmd_name, xcommand_t function )
 Cmd_AddClientCommand
 ============
 */
-int Cmd_AddClientCommand( const char *cmd_name, xcommand_t function )
+int GAME_EXPORT Cmd_AddClientCommand( const char *cmd_name, xcommand_t function )
 {
 	return Cmd_AddCommandEx( __FUNCTION__, cmd_name, function, "client command", CMD_CLIENTDLL );
 }
@@ -706,7 +706,7 @@ int Cmd_AddClientCommand( const char *cmd_name, xcommand_t function )
 Cmd_AddGameUICommand
 ============
 */
-int Cmd_AddGameUICommand( const char *cmd_name, xcommand_t function )
+int GAME_EXPORT Cmd_AddGameUICommand( const char *cmd_name, xcommand_t function )
 {
 	return Cmd_AddCommandEx( __FUNCTION__, cmd_name, function, "gameui command", CMD_GAMEUIDLL );
 }
@@ -726,7 +726,7 @@ int Cmd_AddRefCommand( const char *cmd_name, xcommand_t function, const char *de
 Cmd_RemoveCommand
 ============
 */
-void Cmd_RemoveCommand( const char *cmd_name )
+void GAME_EXPORT Cmd_RemoveCommand( const char *cmd_name )
 {
 	cmd_t	*cmd, **back;
 
@@ -765,7 +765,7 @@ void Cmd_RemoveCommand( const char *cmd_name )
 Cmd_LookupCmds
 ============
 */
-void Cmd_LookupCmds( char *buffer, void *ptr, setpair_t callback )
+void Cmd_LookupCmds( void *buffer, void *ptr, setpair_t callback )
 {
 	cmd_t	*cmd;
 	cmdalias_t	*alias;
@@ -999,16 +999,15 @@ void Cmd_ExecuteString( char *text )
 	// forward the command line to the server, so the entity DLL can parse it
 	if( host.type == HOST_NORMAL )
 	{
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 		if( cls.state >= ca_connected )
 		{
 			Cmd_ForwardToServer();
 		}
 		else
 #endif // XASH_DEDICATED
-		if( text[0] != '@' && Cvar_VariableInteger( "host_gameloaded" ))
+		if( Cvar_VariableInteger( "host_gameloaded" ))
 		{
-			// commands with leading '@' are hidden system commands
 			Con_Printf( S_WARN "Unknown command \"%s\"\n", text );
 		}
 	}
@@ -1023,7 +1022,7 @@ things like godmode, noclip, etc, are commands directed to the server,
 so when they are typed in at the console, they will need to be forwarded.
 ===================
 */
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 void Cmd_ForwardToServer( void )
 {
 	char	str[MAX_CMD_BUFFER];
@@ -1140,6 +1139,83 @@ void Cmd_Unlink( int group )
 	Con_Reportf( "unlink %i commands\n", count );
 }
 
+static void Cmd_Apropos_f( void )
+{
+	cmd_t *cmd;
+	convar_t *var;
+	cmdalias_t *alias;
+	const char *partial;
+	int count = 0;
+	qboolean ispattern;
+
+	if( Cmd_Argc() > 1 )
+	{
+		partial = Cmd_Args();
+	}
+	else
+	{
+		Msg( "apropos what?\n" );
+		return;
+	}
+
+	ispattern = partial && ( Q_strchr( partial, '*' ) || Q_strchr( partial, '?' ));
+	if( !ispattern )
+		partial = va( "*%s*", partial );
+
+	for( var = (convar_t*)Cvar_GetList(); var; var = var->next )
+	{
+		if( !matchpattern_with_separator( var->name, partial, true, "", false ) )
+		{
+			const char *desc;
+
+			if( var->flags & FCVAR_EXTENDED )
+				desc = var->desc;
+			else desc = "game cvar";
+
+			if( !desc )
+				desc = "user cvar";
+
+			if( !matchpattern_with_separator( desc, partial, true, "", false ))
+				continue;
+		}
+
+		// TODO: maybe add flags output like cvarlist, also
+		// fix inconsistencies in output from different commands
+		Msg( "cvar ^3%s^7 is \"%s\" [\"%s\"] %s\n",
+			var->name, var->string,
+			( var->flags & FCVAR_EXTENDED ) ? var->def_string : "",
+			( var->flags & FCVAR_EXTENDED ) ? var->desc : "game cvar");
+		count++;
+	}
+
+	for( cmd = Cmd_GetFirstFunctionHandle(); cmd; cmd = Cmd_GetNextFunctionHandle( cmd ) )
+	{
+		if( cmd->name[0] == '@' )
+			continue;	// never show system cmds
+
+		if( !matchpattern_with_separator( cmd->name, partial, true, "", false ) &&
+			!matchpattern_with_separator( cmd->desc, partial, true, "", false ))
+			continue;
+
+		Msg( "command ^2%s^7: %s\n", cmd->name, cmd->desc );
+		count++;
+	}
+
+	for( alias = Cmd_AliasGetList(); alias; alias = alias->next )
+	{
+		// proceed a bit differently here as an alias value always got a final \n
+		if( !matchpattern_with_separator( alias->name, partial, true, "", false ) &&
+			!matchpattern_with_separator( alias->value, partial, true, "\n", false )) // when \n is a separator, wildcards don't match it //-V666
+			continue;
+
+		Msg( "alias ^5%s^7: %s", alias->name, alias->value ); // do not print an extra \n
+		count++;
+	}
+
+	Msg( "\n%i result%s\n\n", count, (count > 1) ? "s" : "" );
+}
+
+
 /*
 ============
 Cmd_Null_f
@@ -1171,9 +1247,10 @@ void Cmd_Init( void )
 	Cmd_AddCommand( "wait", Cmd_Wait_f, "make script execution wait for some rendered frames" );
 	Cmd_AddCommand( "cmdlist", Cmd_List_f, "display all console commands beginning with the specified prefix" );
 	Cmd_AddCommand( "stuffcmds", Cmd_StuffCmds_f, "execute commandline parameters (must be present in .rc script)" );
-#ifndef XASH_DEDICATED
+	Cmd_AddCommand( "apropos", Cmd_Apropos_f, "lists all console variables/commands/aliases containing the specified string in the name or description" );
+#if !XASH_DEDICATED
 	Cmd_AddCommand( "cmd", Cmd_ForwardToServer, "send a console commandline to the server" );
-#endif
+#endif // XASH_DEDICATED
 	Cmd_AddCommand( "alias", Cmd_Alias_f, "create a script function. Without arguments show the list of all alias" );
 	Cmd_AddCommand( "unalias", Cmd_UnAlias_f, "remove a script function" );
 	Cmd_AddCommand( "if", Cmd_If_f, "compare and set condition bits" );

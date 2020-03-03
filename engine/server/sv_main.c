@@ -117,6 +117,12 @@ convar_t	*sv_validate_changelevel;
 convar_t	*sv_sendvelocity;
 convar_t	*sv_hostmap;
 
+convar_t	*sv_allow_noinputdevices;
+convar_t	*sv_allow_touch;
+convar_t	*sv_allow_mouse;
+convar_t	*sv_allow_joystick;
+convar_t	*sv_allow_vr;
+
 void Master_Shutdown( void );
 
 //============================================================================
@@ -152,6 +158,9 @@ send updates to client if changed
 */
 void SV_UpdateMovevars( qboolean initialize )
 {
+	if( sv.state == ss_dead )
+		return;
+
 	if( !initialize && !host.movevars_changed )
 		return;
 
@@ -260,6 +269,13 @@ void SV_CheckCmdTimes( void )
 	}
 }
 
+/*
+=================
+SV_ProcessFile
+
+process incoming file (customization)
+=================
+*/
 void SV_ProcessFile( sv_client_t *cl, const char *filename )
 {
 	customization_t	*pList;
@@ -463,7 +479,7 @@ void SV_CheckTimeouts( void )
 		{
 			if( cl->edict && !FBitSet( cl->edict->v.flags, FL_SPECTATOR|FL_FAKECLIENT ))
 				numclients++;
-                    }
+		}
 
 		// fake clients do not timeout
 		if( FBitSet( cl->flags, FCL_FAKECLIENT ))
@@ -554,11 +570,6 @@ qboolean SV_IsSimulating( void )
 SV_RunGameFrame
 =================
 */
-/*
-=================
-SV_RunGameFrame
-=================
-*/
 qboolean SV_RunGameFrame( void )
 {
 	sv.simulating = SV_IsSimulating();
@@ -568,9 +579,8 @@ qboolean SV_RunGameFrame( void )
 
 	if( sv_fps.value != 0.0f )
 	{
-		double		fps = (1.0 / (double)( sv_fps.value - 0.01 )); // FP issues
+		double		fps = (1.0 / (double)( sv_fps.value - 0.01f )); // FP issues
 		int		numFrames = 0;
-		static double	oldtime;
 
 		while( sv.time_residual >= fps )
 		{
@@ -637,6 +647,17 @@ void Host_ServerFrame( void )
 
 	// send a heartbeat to the master if needed
 	Master_Heartbeat ();
+}
+
+/*
+==================
+Host_SetServerState
+==================
+*/
+void Host_SetServerState( int state )
+{
+	Cvar_FullSet( "host_serverstate", va( "%i", state ), FCVAR_READ_ONLY );
+	sv.state = state;
 }
 
 //============================================================================
@@ -749,6 +770,64 @@ void SV_AddToMaster( netadr_t from, sizebuf_t *msg )
 	NET_SendPacket( NS_SERVER, Q_strlen( s ), s, from );
 }
 
+/*
+====================
+SV_ProcessUserAgent
+
+send error message and return false on wrong input devices
+====================
+*/
+qboolean SV_ProcessUserAgent( netadr_t from, const char *useragent )
+{
+	const char *input_devices_str = Info_ValueForKey( useragent, "d" );
+	const char *id = Info_ValueForKey( useragent, "i" );
+
+	if( !sv_allow_noinputdevices->value && ( !input_devices_str || !input_devices_str[0] ) )
+	{
+		SV_RejectConnection( from, "This server does not allow\nconnect without input devices list.\nPlease update your engine.\n" );
+		return false;
+	}
+
+	if( input_devices_str )
+	{
+		int input_devices = Q_atoi( input_devices_str );
+
+		if( !sv_allow_touch->value && ( input_devices & INPUT_DEVICE_TOUCH ) )
+		{
+			SV_RejectConnection( from, "This server does not allow touch\nDisable it (touch_enable 0)\nto play on this server\n" );
+			return false;
+		}
+		if( !sv_allow_mouse->value && ( input_devices & INPUT_DEVICE_MOUSE) )
+		{
+			SV_RejectConnection( from, "This server does not allow mouse\nDisable it(m_ignore 1)\nto play on this server\n" );
+			return false;
+		}
+		if( !sv_allow_joystick->value && ( input_devices & INPUT_DEVICE_JOYSTICK) )
+		{
+			SV_RejectConnection( from, "This server does not allow joystick\nDisable it(joy_enable 0)\nto play on this server\n" );
+			return false;
+		}
+		if( !sv_allow_vr->value && ( input_devices & INPUT_DEVICE_VR) )
+		{
+			SV_RejectConnection( from, "This server does not allow VR\n" );
+			return false;
+		}
+	}
+
+	if( id )
+	{
+		qboolean banned = SV_CheckID( id );
+
+		if( banned )
+		{
+			SV_RejectConnection( from, "You are banned!\n" );
+			return false;
+		}
+	}
+
+	return true;
+}
+
 //============================================================================
 
 /*
@@ -852,6 +931,12 @@ void SV_Init( void )
 	Cvar_RegisterVariable (&mp_logfile);
 	Cvar_RegisterVariable (&sv_background_freeze);
 
+	sv_allow_joystick = Cvar_Get( "sv_allow_joystick", "1", FCVAR_ARCHIVE, "allow connect with joystick enabled" );
+	sv_allow_mouse = Cvar_Get( "sv_allow_mouse", "1", FCVAR_ARCHIVE, "allow connect with mouse" );
+	sv_allow_touch = Cvar_Get( "sv_allow_touch", "1", FCVAR_ARCHIVE, "allow connect with touch controls" );
+	sv_allow_vr = Cvar_Get( "sv_allow_vr", "1", FCVAR_ARCHIVE, "allow connect from vr version" );
+	sv_allow_noinputdevices = Cvar_Get( "sv_allow_noinputdevices", "1", FCVAR_ARCHIVE, "allow connect from old versions without useragent" );
+
 	// when we in developer-mode automatically turn cheats on
 	if( host_developer.value ) Cvar_SetValue( "sv_cheats", 1.0f );
 
@@ -862,6 +947,7 @@ void SV_Init( void )
 
 	Cvar_FullSet( "sv_version", versionString, FCVAR_READ_ONLY );
 
+	SV_InitFilter();
 	SV_ClearGameState ();	// delete all temporary *.hl files
 }
 
@@ -877,7 +963,7 @@ to totally exit after returning from this function.
 */
 void SV_FinalMessage( const char *message, qboolean reconnect )
 {
-	byte		msg_buf[64];
+	byte		msg_buf[1024];
 	sv_client_t	*cl;
 	sizebuf_t		msg;
 	int		i;
@@ -983,6 +1069,9 @@ void SV_Shutdown( const char *finalmsg )
 
 	SV_FreeClients();
 	svs.maxclients = 0;
+
+	// release all models
+	Mod_FreeAll();
 
 	HPAK_FlushHostQueue();
 	Log_Printf( "Server shutdown\n" );

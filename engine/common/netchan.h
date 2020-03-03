@@ -42,7 +42,7 @@ GNU General Public License for more details.
 #define NET_MAX_PAYLOAD		MAX_INIT_MSG
 
 // Theoretically maximum size of UDP-packet without header and hardware-specific data
-#define NET_MAX_FRAGMENT		65536
+#define NET_MAX_FRAGMENT		65535
 
 // because encoded as highpart of uint32
 #define NET_MAX_BUFFER_ID		32767
@@ -78,16 +78,37 @@ GNU General Public License for more details.
 #define PORT_SERVER			27015
 
 #define MULTIPLAYER_BACKUP		64	// how many data slots to use when in multiplayer (must be power of 2)
-#define SINGLEPLAYER_BACKUP		16	// same for single player  
+#define SINGLEPLAYER_BACKUP		16	// same for single player
 #define CMD_BACKUP			64	// allow a lot of command backups for very fast systems
 #define CMD_MASK			(CMD_BACKUP - 1)
 #define NUM_PACKET_ENTITIES		256	// 170 Mb for multiplayer with 32 players
 #define MAX_CUSTOM_BASELINES		64
-
 #define NET_LEGACY_EXT_SPLIT		(1U<<1)
 #define NETSPLIT_BACKUP 8
 #define NETSPLIT_BACKUP_MASK (NETSPLIT_BACKUP - 1)
 #define NETSPLIT_HEADER_SIZE 18
+
+#if XASH_LOW_MEMORY == 2
+	#undef MULTIPLAYER_BACKUP
+	#undef SINGLEPLAYER_BACKUP
+	#undef NUM_PACKET_ENTITIES
+	#undef MAX_CUSTOM_BASELINES
+	#undef NET_MAX_FRAGMENT
+	#define MULTIPLAYER_BACKUP		4	// breaks protocol in legacy mode, new protocol status unknown
+	#define SINGLEPLAYER_BACKUP		4
+	#define NUM_PACKET_ENTITIES		32
+	#define MAX_CUSTOM_BASELINES		8
+	#define NET_MAX_FRAGMENT		32768
+#elif XASH_LOW_MEMORY == 1
+	#undef SINGLEPLAYER_BACKUP
+	#undef NUM_PACKET_ENTITIES
+	#undef MAX_CUSTOM_BASELINES
+	#undef NET_MAX_FRAGMENT
+	#define SINGLEPLAYER_BACKUP		4
+	#define NUM_PACKET_ENTITIES		64
+	#define MAX_CUSTOM_BASELINES		8
+	#define NET_MAX_FRAGMENT		32768
+#endif
 
 typedef struct netsplit_chain_packet_s
 {
@@ -202,11 +223,11 @@ typedef struct netchan_s
 	double		cleartime;	// if realtime > cleartime, free to send next packet
 
 	// Sequencing variables
-	int		incoming_sequence;			// increasing count of sequence numbers               
-	int		incoming_acknowledged;		// # of last outgoing message that has been ack'd.          
-	int		incoming_reliable_acknowledged;	// toggles T/F as reliable messages are received.	
-	int		incoming_reliable_sequence;		// single bit, maintained local	    
-	int		outgoing_sequence;			// message we are sending to remote              
+	int		incoming_sequence;			// increasing count of sequence numbers
+	int		incoming_acknowledged;		// # of last outgoing message that has been ack'd.
+	int		incoming_reliable_acknowledged;	// toggles T/F as reliable messages are received.
+	int		incoming_reliable_sequence;		// single bit, maintained local
+	int		outgoing_sequence;			// message we are sending to remote
 	int		reliable_sequence;			// whether the message contains reliable payload, single bit
 	int		last_reliable_sequence;		// outgoing sequence number of last send that had reliable data
 
@@ -227,7 +248,7 @@ typedef struct netchan_s
 	// Multiple outgoing buffers can be queued in succession
 	fragbufwaiting_t	*waitlist[MAX_STREAMS]; 
 
-	int		reliable_fragment[MAX_STREAMS];	// is reliable waiting buf a fragment?          
+	int		reliable_fragment[MAX_STREAMS];	// is reliable waiting buf a fragment?
 	uint		reliable_fragid[MAX_STREAMS];		// buffer id for each waiting fragment
 
 	fragbuf_t		*fragbufs[MAX_STREAMS];	// the current fragment being set

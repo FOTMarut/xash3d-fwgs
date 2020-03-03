@@ -25,14 +25,14 @@ extern "C" {
 //
 // vgui_draw.c
 //
-void VGui_Startup( int width, int height );
+void VGui_Startup( const char *clientlib, int width, int height );
 void VGui_Shutdown( void );
-void VGui_Paint();
-void VGui_RunFrame();
+void VGui_Paint( void );
+void VGui_RunFrame( void );
 void VGui_KeyEvent( int key, int down );
 void VGui_MouseMove( int x, int y );
 qboolean VGui_IsActive( void );
-void *VGui_GetPanel();
+void *VGui_GetPanel( void );
 #ifdef __cplusplus
 }
 #endif

@@ -13,12 +13,16 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
-#ifdef _WIN32
+#include "common.h"
+#include "client.h" // ConnectionProgress
+#include "netchan.h"
+#include "mathlib.h"
+#if XASH_WIN32
 // Winsock
-#include <winsock.h>
-#include <wsipx.h>
-#define socklen_t int //#include <ws2tcpip.h>
-#else
+#include <WS2tcpip.h>
+typedef int WSAsize_t;
+
+#elif !defined XASH_NO_NETWORK
 // BSD sockets
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -27,141 +31,10 @@ GNU General Public License for more details.
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-// Errors handling
 #include <errno.h>
 #include <fcntl.h>
-#endif
-#include "common.h"
-#include "netchan.h"
-#include "mathlib.h"
 
-#define NET_USE_FRAGMENTS
-
-#define PORT_ANY			-1
-#define MAX_LOOPBACK		4
-#define MASK_LOOPBACK		(MAX_LOOPBACK - 1)
-
-#define MAX_ROUTEABLE_PACKET		1400
-#define	SPLITPACKET_MIN_SIZE			508		// RFC 791: 576(min ip packet) - 60 (ip header) - 8 (udp header)
-#define SPLITPACKET_MAX_SIZE			64000
-#define NET_MAX_FRAGMENTS		( NET_MAX_FRAGMENT / (SPLITPACKET_MIN_SIZE - sizeof( SPLITPACKET )) )
-
-#ifndef _WIN32 // it seems we need to use WS2 to support it
-#define HAVE_GETADDRINFO
-#endif
-
-#ifdef _WIN32
-// wsock32.dll exports
-static int (_stdcall *pWSACleanup)( void );
-static word (_stdcall *pNtohs)( word netshort );
-static int (_stdcall *pWSAGetLastError)( void );
-static int (_stdcall *pCloseSocket)( SOCKET s );
-static word (_stdcall *pHtons)( word hostshort );
-static dword (_stdcall *pInet_Addr)( const char* cp );
-static char* (_stdcall *pInet_Ntoa)( struct in_addr in );
-static SOCKET (_stdcall *pSocket)( int af, int type, int protocol );
-static struct hostent *(_stdcall *pGetHostByName)( const char* name );
-static int (_stdcall *pIoctlSocket)( SOCKET s, long cmd, dword* argp );
-static int (_stdcall *pWSAStartup)( word wVersionRequired, LPWSADATA lpWSAData );
-static int (_stdcall *pBind)( SOCKET s, const struct sockaddr* addr, int namelen );
-static int (_stdcall *pSetSockopt)( SOCKET s, int level, int optname, const char* optval, int optlen );
-static int (_stdcall *pRecvFrom)( SOCKET s, char* buf, int len, int flags, struct sockaddr* from, int* fromlen );
-static int (_stdcall *pSendTo)( SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen );
-static int (_stdcall *pSelect)( int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, const struct timeval* timeout );
-static int (_stdcall *pConnect)( SOCKET s, const struct sockaddr *name, int namelen );
-static int (_stdcall *pGetSockName)( SOCKET s, struct sockaddr *name, int *namelen );
-static int (_stdcall *pSend)( SOCKET s, const char *buf, int len, int flags );
-static int (_stdcall *pRecv)( SOCKET s, char *buf, int len, int flags );
-static int (_stdcall *pGetHostName)( char *name, int namelen );
-static dword (_stdcall *pNtohl)( dword netlong );
-
-static dllfunc_t winsock_funcs[] =
-{
-{ "bind", (void **) &pBind },
-{ "send", (void **) &pSend },
-{ "recv", (void **) &pRecv },
-{ "ntohs", (void **) &pNtohs },
-{ "htons", (void **) &pHtons },
-{ "ntohl", (void **) &pNtohl },
-{ "socket", (void **) &pSocket },
-{ "select", (void **) &pSelect },
-{ "sendto", (void **) &pSendTo },
-{ "connect", (void **) &pConnect },
-{ "recvfrom", (void **) &pRecvFrom },
-{ "inet_addr", (void **) &pInet_Addr },
-{ "inet_ntoa", (void **) &pInet_Ntoa },
-{ "WSAStartup", (void **) &pWSAStartup },
-{ "WSACleanup", (void **) &pWSACleanup },
-{ "setsockopt", (void **) &pSetSockopt },
-{ "ioctlsocket", (void **) &pIoctlSocket },
-{ "closesocket", (void **) &pCloseSocket },
-{ "gethostname", (void **) &pGetHostName },
-{ "getsockname", (void **) &pGetSockName },
-{ "gethostbyname", (void **) &pGetHostByName },
-{ "WSAGetLastError", (void **) &pWSAGetLastError },
-{ NULL, NULL }
-};
-
-dll_info_t winsock_dll = { "wsock32.dll", winsock_funcs, false };
-
-static void (_stdcall *pInitializeCriticalSection)( void* );
-static void (_stdcall *pEnterCriticalSection)( void* );
-static void (_stdcall *pLeaveCriticalSection)( void* );
-static void (_stdcall *pDeleteCriticalSection)( void* );
-
-static dllfunc_t kernel32_funcs[] =
-{
-	{ "InitializeCriticalSection", (void **) &pInitializeCriticalSection },
-	{ "EnterCriticalSection", (void **) &pEnterCriticalSection },
-	{ "LeaveCriticalSection", (void **) &pLeaveCriticalSection },
-	{ "DeleteCriticalSection", (void **) &pDeleteCriticalSection },
-	{ NULL, NULL }
-};
-
-dll_info_t kernel32_dll = { "kernel32.dll", kernel32_funcs, false };
-
-static void NET_InitializeCriticalSections( void );
-
-qboolean NET_OpenWinSock( void )
-{
-	if( Sys_LoadLibrary( &kernel32_dll ) )
-		NET_InitializeCriticalSections();
-
-	// initialize the Winsock function vectors (we do this instead of statically linking
-	// so we can run on Win 3.1, where there isn't necessarily Winsock)
-	return Sys_LoadLibrary( &winsock_dll );
-}
-
-void NET_FreeWinSock( void )
-{
-	Sys_FreeLibrary( &winsock_dll );
-}
-#else // _WIN32
-#define pHtons htons
-#define pConnect connect
-#define pInet_Addr inet_addr
-#define pRecvFrom recvfrom
-#define pSendTo sendto
-#define pSocket socket
-#define pIoctlSocket ioctl
-#define pCloseSocket close
-#define pSetSockopt setsockopt
-#define pBind bind
-#define pGetHostName gethostname
-#define pGetSockName getsockname
-#define pGetHs
-#define pRecv recv
-#define pSend send
-#define pInet_Ntoa inet_ntoa
-#define pNtohs ntohs
-#define pGetHostByName gethostbyname
-#define pSelect select
-#define pGetAddrInfo getaddrinfo
-#define pWSAGetLastError() errno
-
-#define SOCKET int
-#define INVALID_SOCKET -1
-
+#define WSAGetLastError()  errno
 #define WSAEINTR           EINTR
 #define WSAEBADF           EBADF
 #define WSAEACCES          EACCES
@@ -199,16 +72,40 @@ void NET_FreeWinSock( void )
 #define WSAENAMETOOLONG    ENAMETOOLONG
 #define WSAEHOSTDOWN       EHOSTDOWN
 
-#ifdef __EMSCRIPTEN__
+
+#ifndef XASH_DOS4GW
+#define HAVE_GETADDRINFO
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+
+#if XASH_EMSCRIPTEN
 /* All socket operations are non-blocking already */
-static int ioctl_stub( int d, unsigned long r, ...)
+static int ioctl_stub( int d, unsigned long r, ... )
 {
 	return 0;
 }
-#undef pIoctlSocket
-#define pIoctlSocket ioctl_stub
-#endif // __EMSCRIPTEN__
-#endif // !_WIN32
+#define ioctlsocket ioctl_stub
+#else // XASH_EMSCRIPTEN
+#define ioctlsocket ioctl
+#endif // XASH_EMSCRIPTEN
+#define closesocket close
+#endif
+#define SOCKET int
+typedef int WSAsize_t;
+#else
+#include "platform/stub/net_stub.h"
+#endif
+
+#define NET_USE_FRAGMENTS
+
+#define PORT_ANY			-1
+#define MAX_LOOPBACK		4
+#define MASK_LOOPBACK		(MAX_LOOPBACK - 1)
+
+#define MAX_ROUTEABLE_PACKET		1400
+#define SPLITPACKET_MIN_SIZE			508		// RFC 791: 576(min ip packet) - 60 (ip header) - 8 (udp header)
+#define SPLITPACKET_MAX_SIZE			64000
+#define NET_MAX_FRAGMENTS		( NET_MAX_FRAGMENT / (SPLITPACKET_MIN_SIZE - sizeof( SPLITPACKET )) )
 
 typedef struct
 {
@@ -265,7 +162,7 @@ typedef struct
 	qboolean		threads_initialized;
 	qboolean		configured;
 	qboolean		allow_ip;
-#ifdef _WIN32
+#if XASH_WIN32
 	WSADATA		winsockdata;
 #endif
 } net_state_t;
@@ -289,11 +186,11 @@ NET_ErrorString
 */
 char *NET_ErrorString( void )
 {
-#ifdef _WIN32
+#if XASH_WIN32
 	int	err = WSANOTINITIALISED;
 
 	if( net.initialized )
-		err = pWSAGetLastError();
+		err = WSAGetLastError();
 
 	switch( err )
 	{
@@ -350,7 +247,7 @@ char *NET_ErrorString( void )
 
 _inline qboolean NET_IsSocketError( int retval )
 {
-#ifdef _WIN32
+#if XASH_WIN32 || XASH_DOS4GW
 	return retval == SOCKET_ERROR ? true : false;
 #else
 	return retval < 0 ? true : false;
@@ -359,7 +256,7 @@ _inline qboolean NET_IsSocketError( int retval )
 
 _inline qboolean NET_IsSocketValid( int socket )
 {
-#ifdef _WIN32
+#if XASH_WIN32 || XASH_DOS4GW
 	return socket != INVALID_SOCKET;
 #else
 	return socket >= 0;
@@ -419,7 +316,7 @@ int NET_GetHostByName( const char *hostname )
 	memset( &hints, 0, sizeof( hints ));
 	hints.ai_family = AF_INET;
 
-	if( !pGetAddrInfo( hostname, NULL, &hints, &ai ))
+	if( !getaddrinfo( hostname, NULL, &hints, &ai ))
 	{
 		for( cur = ai; cur; cur = cur->ai_next )
 		{
@@ -437,20 +334,20 @@ int NET_GetHostByName( const char *hostname )
 	return ip;
 #else
 	struct hostent *h;
-	if(!( h = pGetHostByName( hostname )))
+	if(!( h = gethostbyname( hostname )))
 		return 0;
 	return *(int *)h->h_addr_list[0];
 #endif
 }
 
-#if !defined XASH_NO_ASYNC_NS_RESOLVE && ( defined _WIN32 || !defined __EMSCRIPTEN__ )
+#if !defined XASH_NO_ASYNC_NS_RESOLVE && ( XASH_WIN32 || !(XASH_EMSCRIPTEN || XASH_DOS4GW) )
 #define CAN_ASYNC_NS_RESOLVE
 #endif
 
 #ifdef CAN_ASYNC_NS_RESOLVE
 static void NET_ResolveThread( void );
 
-#if !defined _WIN32
+#if !XASH_WIN32
 #include <pthread.h>
 #define mutex_lock pthread_mutex_lock
 #define mutex_unlock pthread_mutex_unlock
@@ -459,25 +356,17 @@ static void NET_ResolveThread( void );
 #define detach_thread( x ) pthread_detach(x)
 #define mutex_t  pthread_mutex_t
 #define thread_t pthread_t
-
 void *NET_ThreadStart( void *unused )
 {
 	NET_ResolveThread();
 	return NULL;
 }
 #else // WIN32
-typedef struct cs
-{
-	void* p1;
-	int   i1, i2;
-	void *p2, *p3;
-	uint  i4;
-} mutex_t;
-#define mutex_lock pEnterCriticalSection
-#define mutex_unlock pLeaveCriticalSection
+#define mutex_lock EnterCriticalSection
+#define mutex_unlock LeaveCriticalSection
 #define detach_thread( x ) CloseHandle(x)
 #define create_thread( pfn ) nsthread.thread = CreateThread( NULL, 0, pfn, NULL, 0, NULL )
-#define mutex_t  struct cs
+#define mutex_t  CRITICAL_SECTION
 #define thread_t HANDLE
 DWORD WINAPI NET_ThreadStart( LPVOID unused )
 {
@@ -502,12 +391,12 @@ static struct nsthread_s
 	string  hostname;
 	qboolean busy;
 } nsthread
-#ifndef _WIN32
+#if !XASH_WIN32
 = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER }
 #endif
 ;
 
-#ifdef _WIN32
+#if XASH_WIN32
 static void NET_InitializeCriticalSections( void )
 {
 	net.threads_initialized = true;
@@ -577,13 +466,13 @@ static int NET_StringToSockaddr( const char *s, struct sockaddr *sadr, qboolean 
 		if( *colon == ':' )
 		{
 			*colon = 0;
-			((struct sockaddr_in *)sadr)->sin_port = pHtons((short)Q_atoi( colon + 1 ));
+			((struct sockaddr_in *)sadr)->sin_port = htons((short)Q_atoi( colon + 1 ));
 		}
 	}
 
 	if( copy[0] >= '0' && copy[0] <= '9' )
 	{
-		*(int *)&((struct sockaddr_in *)sadr)->sin_addr = pInet_Addr( copy );
+		*(int *)&((struct sockaddr_in *)sadr)->sin_addr = inet_addr( copy );
 	}
 	else
 	{
@@ -651,7 +540,7 @@ char *NET_AdrToString( const netadr_t a )
 {
 	if( a.type == NA_LOOPBACK )
 		return "loopback";
-	return va( "%i.%i.%i.%i:%i", a.ip[0], a.ip[1], a.ip[2], a.ip[3], pNtohs( a.port ));
+	return va( "%i.%i.%i.%i:%i", a.ip[0], a.ip[1], a.ip[2], a.ip[3], ntohs( a.port ));
 }
 
 /*
@@ -1004,7 +893,7 @@ static void NET_AdjustLag( void )
 			converge = dt * 200.0f;
 			if( fabs( diff ) < converge )
 				converge = fabs( diff );
-			if( diff < 0.0 )
+			if( diff < 0.0f )
 				converge = -converge;
 			net.fakelag += converge;
 		}
@@ -1075,7 +964,7 @@ static qboolean NET_LagPacket( qboolean newdata, netsrc_t sock, netadr_t *from, 
 
 	while( pPacket != &net.lagdata[sock] )
 	{
-		if( pPacket->receivedtime <= curtime - ( net.fakelag / 1000.0 ))
+		if( pPacket->receivedtime <= curtime - ( net.fakelag / 1000.0f ))
 			break;
 
 		pPacket = pPacket->next;
@@ -1106,7 +995,7 @@ NET_GetLong
 receive long packet from network
 ==================
 */
-qboolean NET_GetLong( byte *pData, int size, int *outSize, int splitsize )
+qboolean NET_GetLong( byte *pData, int size, size_t *outSize, int splitsize )
 {
 	int		i, sequence_number, offset;
 	SPLITPACKET	*pHeader = (SPLITPACKET *)pData;
@@ -1202,7 +1091,7 @@ qboolean NET_QueuePacket( netsrc_t sock, netadr_t *from, byte *data, size_t *len
 	byte		buf[NET_MAX_FRAGMENT];
 	int		ret;
 	int		net_socket;
-	int		addr_len;
+	WSAsize_t	addr_len;
 	struct sockaddr	addr;
 
 	*length = 0;
@@ -1212,7 +1101,7 @@ qboolean NET_QueuePacket( netsrc_t sock, netadr_t *from, byte *data, size_t *len
 	if( NET_IsSocketValid( net_socket ) )
 	{
 		addr_len = sizeof( addr );
-		ret = pRecvFrom( net_socket, buf, sizeof( buf ), 0, (struct sockaddr *)&addr, &addr_len );
+		ret = recvfrom( net_socket, buf, sizeof( buf ), 0, (struct sockaddr *)&addr, &addr_len );
 
 		if( !NET_IsSocketError( ret ) )
 		{
@@ -1223,7 +1112,7 @@ qboolean NET_QueuePacket( netsrc_t sock, netadr_t *from, byte *data, size_t *len
 				// Transfer data
 				memcpy( data, buf, ret );
 				*length = ret;
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 				if( CL_LegacyMode() )
 					return NET_LagPacket( true, sock, from, length, data );
 
@@ -1243,7 +1132,7 @@ qboolean NET_QueuePacket( netsrc_t sock, netadr_t *from, byte *data, size_t *len
 		}
 		else
 		{
-			int	err = pWSAGetLastError();
+			int	err = WSAGetLastError();
 
 			switch( err )
 			{
@@ -1251,6 +1140,7 @@ qboolean NET_QueuePacket( netsrc_t sock, netadr_t *from, byte *data, size_t *len
 			case WSAECONNRESET:
 			case WSAECONNREFUSED:
 			case WSAEMSGSIZE:
+			case WSAETIMEDOUT:
 				break;
 			default:	// let's continue even after errors
 				Con_DPrintf( S_ERROR "NET_QueuePacket: %s from %s\n", NET_ErrorString(), NET_AdrToString( *from ));
@@ -1333,7 +1223,7 @@ int NET_SendLong( netsrc_t sock, int net_socket, const char *buf, size_t len, in
 					packet_number + 1, packet_count, size, net.sequence_number, NET_AdrToString( adr ));
 			}
 
-			ret = pSendTo( net_socket, packet, size + sizeof( SPLITPACKET ), flags, to, tolen );
+			ret = sendto( net_socket, packet, size + sizeof( SPLITPACKET ), flags, to, tolen );
 			if( ret < 0 ) return ret; // error
 
 			if( ret >= size )
@@ -1349,7 +1239,7 @@ int NET_SendLong( netsrc_t sock, int net_socket, const char *buf, size_t len, in
 #endif
 	{
 		// no fragmenantion for client connection
-		return pSendTo( net_socket, buf, len, flags, to, tolen );
+		return sendto( net_socket, buf, len, flags, to, tolen );
 	}
 }
 
@@ -1362,7 +1252,7 @@ void NET_SendPacketEx( netsrc_t sock, size_t length, const void *data, netadr_t 
 {
 	int		ret;
 	struct sockaddr	addr;
-	SOCKET		net_socket;
+	SOCKET		net_socket = 0;
 
 	if( !net.initialized || to.type == NA_LOOPBACK )
 	{
@@ -1392,7 +1282,7 @@ void NET_SendPacketEx( netsrc_t sock, size_t length, const void *data, netadr_t 
 
 	if( NET_IsSocketError( ret ))
 	{
-		int err = pWSAGetLastError();
+		int err = WSAGetLastError();
 
 		// WSAEWOULDBLOCK is silent
 		if( err == WSAEWOULDBLOCK )
@@ -1425,7 +1315,7 @@ NET_SendPacket
 */
 void NET_SendPacket( netsrc_t sock, size_t length, const void *data, netadr_t to )
 {
-	return NET_SendPacketEx( sock, length, data, to, 0 );
+	NET_SendPacketEx( sock, length, data, to, 0 );
 }
 
 /*
@@ -1435,7 +1325,7 @@ NET_BufferToBufferCompress
 generic fast compression
 ====================
 */
-qboolean NET_BufferToBufferCompress( char *dest, uint *destLen, char *source, uint sourceLen )
+qboolean NET_BufferToBufferCompress( byte *dest, uint *destLen, byte *source, uint sourceLen )
 {
 	uint	uCompressedLen = 0;
 	byte	*pbOut = NULL;
@@ -1466,7 +1356,7 @@ NET_BufferToBufferDecompress
 generic fast decompression
 ====================
 */
-qboolean NET_BufferToBufferDecompress( char *dest, uint *destLen, char *source, uint sourceLen )
+qboolean NET_BufferToBufferDecompress( byte *dest, uint *destLen, byte *source, uint sourceLen )
 {
 	if( LZSS_IsCompressed( source ))
 	{
@@ -1492,45 +1382,46 @@ qboolean NET_BufferToBufferDecompress( char *dest, uint *destLen, char *source, 
 
 /*
 ====================
-NET_IPSocket
+NET_Isocket
 ====================
 */
-static int NET_IPSocket( const char *net_interface, int port, qboolean multicast )
+static int NET_Isocket( const char *net_interface, int port, qboolean multicast )
 {
 	struct sockaddr_in	addr;
 	int		err, net_socket;
 	uint		optval = 1;
 	dword		_true = 1;
 
-	if( NET_IsSocketError(( net_socket = pSocket( PF_INET, SOCK_DGRAM, IPPROTO_UDP )) ) )
+	if( NET_IsSocketError(( net_socket = socket( PF_INET, SOCK_DGRAM, IPPROTO_UDP )) ) )
 	{
-		err = pWSAGetLastError();
+		err = WSAGetLastError();
 		if( err != WSAEAFNOSUPPORT )
-			Con_DPrintf( S_WARN "NET_UDPSocket: port: %d socket: %s\n", port, NET_ErrorString( ));
+			Con_DPrintf( S_WARN "NET_UDsocket: port: %d socket: %s\n", port, NET_ErrorString( ));
 		return INVALID_SOCKET;
 	}
 
-	if( NET_IsSocketError( pIoctlSocket( net_socket, FIONBIO, &_true ) ) )
+	if( NET_IsSocketError( ioctlsocket( net_socket, FIONBIO, (void*)&_true ) ) )
 	{
-		Con_DPrintf( S_WARN "NET_UDPSocket: port: %d ioctl FIONBIO: %s\n", port, NET_ErrorString( ));
-		pCloseSocket( net_socket );
-		return INVALID_SOCKET;
+		struct timeval timeout;
+
+		Con_DPrintf( S_WARN "NET_UDsocket: port: %d ioctl FIONBIO: %s\n", port, NET_ErrorString( ));
+		// try timeout instead of NBIO
+		timeout.tv_sec = timeout.tv_usec = 0;
+		setsockopt( net_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
 	}
 
 	// make it broadcast capable
-	if( NET_IsSocketError( pSetSockopt( net_socket, SOL_SOCKET, SO_BROADCAST, (char *)&_true, sizeof( _true ) ) ) )
+	if( NET_IsSocketError( setsockopt( net_socket, SOL_SOCKET, SO_BROADCAST, (char *)&_true, sizeof( _true ) ) ) )
 	{
-		Con_DPrintf( S_WARN "NET_UDPSocket: port: %d setsockopt SO_BROADCAST: %s\n", port, NET_ErrorString( ));
-		pCloseSocket( net_socket );
-		return INVALID_SOCKET;
+		Con_DPrintf( S_WARN "NET_UDsocket: port: %d setsockopt SO_BROADCAST: %s\n", port, NET_ErrorString( ));
 	}
 
 	if( Sys_CheckParm( "-reuse" ) || multicast )
 	{
-		if( NET_IsSocketError( pSetSockopt( net_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval, sizeof( optval )) ) )
+		if( NET_IsSocketError( setsockopt( net_socket, SOL_SOCKET, SO_REUSEADDR, (const char *)&optval, sizeof( optval )) ) )
 		{
-			Con_DPrintf( S_WARN "NET_UDPSocket: port: %d setsockopt SO_REUSEADDR: %s\n", port, NET_ErrorString( ));
-			pCloseSocket( net_socket );
+			Con_DPrintf( S_WARN "NET_UDsocket: port: %d setsockopt SO_REUSEADDR: %s\n", port, NET_ErrorString( ));
+			closesocket( net_socket );
 			return INVALID_SOCKET;
 		}
 	}
@@ -1540,12 +1431,12 @@ static int NET_IPSocket( const char *net_interface, int port, qboolean multicast
 		optval = 16;
 		Con_Printf( "Enabling LOWDELAY TOS option\n" );
 
-		if( NET_IsSocketError( pSetSockopt( net_socket, IPPROTO_IP, IP_TOS, (const char *)&optval, sizeof( optval )) ) )
+		if( NET_IsSocketError( setsockopt( net_socket, IPPROTO_IP, IP_TOS, (const char *)&optval, sizeof( optval )) ) )
 		{
-			err = pWSAGetLastError();
+			err = WSAGetLastError();
 			if( err != WSAENOPROTOOPT )
-				Con_Printf( S_WARN "NET_UDPSocket: port: %d  setsockopt IP_TOS: %s\n", port, NET_ErrorString( ));
-			pCloseSocket( net_socket );
+				Con_Printf( S_WARN "NET_UDsocket: port: %d  setsockopt IP_TOS: %s\n", port, NET_ErrorString( ));
+			closesocket( net_socket );
 			return INVALID_SOCKET;
 		}
 	}
@@ -1555,22 +1446,22 @@ static int NET_IPSocket( const char *net_interface, int port, qboolean multicast
 	else NET_StringToSockaddr( net_interface, (struct sockaddr *)&addr, false );
 
 	if( port == PORT_ANY ) addr.sin_port = 0;
-	else addr.sin_port = pHtons((short)port);
+	else addr.sin_port = htons((short)port);
 
 	addr.sin_family = AF_INET;
 
-	if( NET_IsSocketError( pBind( net_socket, (void *)&addr, sizeof( addr )) ) )
+	if( NET_IsSocketError( bind( net_socket, (void *)&addr, sizeof( addr )) ) )
 	{
-		Con_DPrintf( S_WARN "NET_UDPSocket: port: %d bind: %s\n", port, NET_ErrorString( ));
-		pCloseSocket( net_socket );
+		Con_DPrintf( S_WARN "NET_UDsocket: port: %d bind: %s\n", port, NET_ErrorString( ));
+		closesocket( net_socket );
 		return INVALID_SOCKET;
 	}
 
 	if( Sys_CheckParm( "-loopback" ))
 	{
 		optval = 1;
-		if( NET_IsSocketError( pSetSockopt( net_socket, IPPROTO_IP, IP_MULTICAST_LOOP, (const char *)&optval, sizeof( optval )) ) )
-			Con_DPrintf( S_WARN "NET_UDPSocket: port %d setsockopt IP_MULTICAST_LOOP: %s\n", port, NET_ErrorString( ));
+		if( NET_IsSocketError( setsockopt( net_socket, IPPROTO_IP, IP_MULTICAST_LOOP, (const char *)&optval, sizeof( optval )) ) )
+			Con_DPrintf( S_WARN "NET_UDsocket: port %d setsockopt IP_MULTICAST_LOOP: %s\n", port, NET_ErrorString( ));
 	}
 
 	return net_socket;
@@ -1590,7 +1481,7 @@ static void NET_OpenIP( void )
 		port = net_iphostport->value;
 		if( !port ) port = net_hostport->value;
 		if( !port ) port = PORT_SERVER; // forcing to default
-		net.ip_sockets[NS_SERVER] = NET_IPSocket( net_ipname->string, port, false );
+		net.ip_sockets[NS_SERVER] = NET_Isocket( net_ipname->string, port, false );
 
 		if( !NET_IsSocketValid( net.ip_sockets[NS_SERVER] ) && Host_IsDedicated() )
 			Host_Error( "Couldn't allocate dedicated server IP port %d.\n", port );
@@ -1605,10 +1496,10 @@ static void NET_OpenIP( void )
 		port = net_ipclientport->value;
 		if( !port ) port = net_clientport->value;
 		if( !port ) port = PORT_ANY; // forcing to default
-		net.ip_sockets[NS_CLIENT] = NET_IPSocket( net_ipname->string, port, false );
+		net.ip_sockets[NS_CLIENT] = NET_Isocket( net_ipname->string, port, false );
 
 		if( !NET_IsSocketValid( net.ip_sockets[NS_CLIENT] ) )
-			net.ip_sockets[NS_CLIENT] = NET_IPSocket( net_ipname->string, PORT_ANY, false );
+			net.ip_sockets[NS_CLIENT] = NET_Isocket( net_ipname->string, PORT_ANY, false );
 		cl_port = port;
 	}
 }
@@ -1624,7 +1515,7 @@ void NET_GetLocalAddress( void )
 {
 	char		buff[512];
 	struct sockaddr_in	address;
-	int		namelen;
+	WSAsize_t		namelen;
 
 	memset( &net_local, 0, sizeof( netadr_t ));
 	buff[0] = '\0';
@@ -1638,7 +1529,7 @@ void NET_GetLocalAddress( void )
 		}
 		else
 		{
-			pGetHostName( buff, 512 );
+			gethostname( buff, 512 );
 
 			// ensure that it doesn't overrun the buffer
 			buff[511] = 0;
@@ -1648,7 +1539,7 @@ void NET_GetLocalAddress( void )
 		{
 			namelen = sizeof( address );
 
-			if( NET_IsSocketError( pGetSockName( net.ip_sockets[NS_SERVER], (struct sockaddr *)&address, &namelen ) ) )
+			if( NET_IsSocketError( getsockname( net.ip_sockets[NS_SERVER], (struct sockaddr *)&address, &namelen ) ) )
 			{
 				// this may happens if multiple clients running on single machine
 				Con_DPrintf( S_ERROR "Could not get TCP/IP address. Reason:  %s\n", NET_ErrorString( ));
@@ -1713,7 +1604,7 @@ void NET_Config( qboolean multiplayer )
 		{
 			if( net.ip_sockets[i] != INVALID_SOCKET )
 			{
-				pCloseSocket( net.ip_sockets[i] );
+				closesocket( net.ip_sockets[i] );
 				net.ip_sockets[i] = INVALID_SOCKET;
 			}
 		}
@@ -1755,6 +1646,7 @@ sleeps msec or until net socket is ready
 */
 void NET_Sleep( int msec )
 {
+#ifndef XASH_NO_NETWORK
 	struct timeval	timeout;
 	fd_set		fdset;
 	int		i = 0;
@@ -1772,7 +1664,8 @@ void NET_Sleep( int msec )
 
 	timeout.tv_sec = msec / 1000;
 	timeout.tv_usec = (msec % 1000) * 1000;
-	pSelect( i+1, &fdset, NULL, NULL, &timeout );
+	select( i+1, &fdset, NULL, NULL, &timeout );
+#endif
 }
 
 /*
@@ -1818,17 +1711,10 @@ void NET_Init( void )
 		net.ip_sockets[i] = INVALID_SOCKET;
 	}
 
-#ifdef _WIN32
-	if( !NET_OpenWinSock( ))	// loading wsock32.dll
-	{
-		Con_DPrintf( S_ERROR "network failed to load wsock32.dll.\n" );
-		return;
-	}
-
-	if( pWSAStartup( MAKEWORD( 1, 1 ), &net.winsockdata ))
+#if XASH_WIN32
+	if( WSAStartup( MAKEWORD( 1, 1 ), &net.winsockdata ) )
 	{
 		Con_DPrintf( S_ERROR "network initialization failed.\n" );
-		NET_FreeWinSock();
 		return;
 	}
 #else
@@ -1871,9 +1757,8 @@ void NET_Shutdown( void )
 	NET_ClearLagData( true, true );
 
 	NET_Config( false );
-#ifdef _WIN32
-	pWSACleanup();
-	NET_FreeWinSock();
+#if XASH_WIN32
+	WSACleanup();
 #endif
 	net.initialized = false;
 }
@@ -1927,7 +1812,7 @@ typedef struct httpfile_s
 	qboolean process;
 
 	// query or response
-   char buf[BUFSIZ];
+   char buf[BUFSIZ+1];
    int header_size, query_length, bytes_sent;
 } httpfile_t;
 
@@ -1981,11 +1866,11 @@ static void HTTP_FreeFile( httpfile_t *file, qboolean error )
 	file->file = NULL;
 
 	if( file->socket != -1 )
-		pCloseSocket( file->socket );
+		closesocket( file->socket );
 
 	file->socket = -1;
 
-	Q_snprintf( incname, 256, "%s.incomplete", file->path );
+	Q_snprintf( incname, 256, "downloaded/%s.incomplete", file->path );
 	if( error )
 	{
 		// Switch to next fastdl server if present
@@ -2011,7 +1896,7 @@ static void HTTP_FreeFile( httpfile_t *file, qboolean error )
 		// Success, rename and process file
 		char name[256];
 
-		Q_snprintf( name, 256, "%s", file->path );
+		Q_snprintf( name, 256, "downloaded/%s", file->path );
 		FS_Rename( incname, name );
 
 		if( file->process )
@@ -2076,14 +1961,21 @@ static qboolean HTTP_ProcessStream( httpfile_t *curfile )
 	char *begin = 0;
 	int res;
 
-	while( ( res = pRecv( curfile->socket, buf, BUFSIZ, 0 ) ) > 0) // if we got there, we are receiving data
+	if( curfile->header_size >= BUFSIZ )
+	{
+		Con_Reportf( S_ERROR "Header to big\n");
+		HTTP_FreeFile( curfile, true );
+		return false;
+	}
+
+	while( ( res = recv( curfile->socket, buf, BUFSIZ - curfile->header_size, 0 ) ) > 0) // if we got there, we are receiving data
 	{
 		curfile->blocktime = 0;
 
 		if( curfile->state < HTTP_RESPONSE_RECEIVED ) // Response still not received
 		{
-			buf[res] = 0; // string break to search \r\n\r\n
 			memcpy( curfile->buf + curfile->header_size, buf, res );
+			curfile->buf[curfile->header_size + res] = 0;
 			begin = Q_strstr( curfile->buf, "\r\n\r\n" );
 
 			if( begin ) // Got full header
@@ -2102,7 +1994,7 @@ static qboolean HTTP_ProcessStream( httpfile_t *curfile )
 					if( begin )
 						*begin = 0;
 
-					Con_Printf( S_ERROR "bad response: %s\n", curfile->buf );
+					Con_Printf( S_ERROR "%s: bad response: %s\n", curfile->path, curfile->buf );
 					HTTP_FreeFile( curfile, true );
 					return false;
 				}
@@ -2119,6 +2011,7 @@ static qboolean HTTP_ProcessStream( httpfile_t *curfile )
 						Con_Reportf( S_WARN "Server reports wrong file size!\n" );
 
 					curfile->size = size;
+					curfile->header_size = 0;
 				}
 
 				if( curfile->size == -1 )
@@ -2147,7 +2040,8 @@ static qboolean HTTP_ProcessStream( httpfile_t *curfile )
 					curfile->downloaded += ret;
 				}
 			}
-			curfile->header_size += res;
+			else
+				curfile->header_size += res;
 		}
 		else if( res > 0 )
 		{
@@ -2169,8 +2063,10 @@ static qboolean HTTP_ProcessStream( httpfile_t *curfile )
 			// as after it will run in same frame
 			if( curfile->checktime > 5 )
 			{
+				float speed = (float)curfile->lastchecksize / ( 5.0f * 1024 );
+
 				curfile->checktime = 0;
-				Con_Reportf( "download speed %f KB/s\n", (float)curfile->lastchecksize / ( 5.0 * 1024 ) );
+				Con_Reportf( "download speed %f KB/s\n", speed );
 				curfile->lastchecksize = 0;
 			}
 		}
@@ -2215,11 +2111,11 @@ void HTTP_Run( void )
 			{
 				Con_Printf( S_ERROR "no servers to download %s!\n", curfile->path );
 				HTTP_FreeFile( curfile, true );
-				continue;
+				break;
 			}
 
 			Con_Reportf( "HTTP: Starting download %s from %s\n", curfile->path, curfile->server->host );
-			Q_snprintf( name, sizeof( name ), "%s.incomplete", curfile->path );
+			Q_snprintf( name, sizeof( name ), "downloaded/%s.incomplete", curfile->path );
 
 			curfile->file = FS_Open( name, "wb", true );
 
@@ -2227,7 +2123,7 @@ void HTTP_Run( void )
 			{
 				Con_Printf( S_ERROR "cannot open %s!\n", name );
 				HTTP_FreeFile( curfile, true );
-				continue;
+				break;
 			}
 
 			curfile->state = HTTP_OPENED;
@@ -2243,17 +2139,17 @@ void HTTP_Run( void )
 		{
 			dword mode;
 
-			curfile->socket = pSocket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+			curfile->socket = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
 
 			// Now set non-blocking mode
 			// You may skip this if not supported by system,
 			// but download will lock engine, maybe you will need to add manual returns
 			mode = 1;
-			pIoctlSocket( curfile->socket, FIONBIO, &mode );
-	#ifdef __linux__
+			ioctlsocket( curfile->socket, FIONBIO, (void*)&mode );
+#if XASH_LINUX
 			// SOCK_NONBLOCK is not portable, so use fcntl
 			fcntl( curfile->socket, F_SETFL, fcntl( curfile->socket, F_GETFL, 0 ) | O_NONBLOCK );
-	#endif
+#endif
 			curfile->state = HTTP_SOCKET;
 		}
 
@@ -2274,24 +2170,24 @@ void HTTP_Run( void )
 			{
 				Con_Printf( S_ERROR "failed to resolve server address for %s!\n", curfile->server->host );
 				HTTP_FreeFile( curfile, true ); // Cannot connect
-				continue;
+				break;
 			}
 			curfile->state = HTTP_NS_RESOLVED;
 		}
 
 		if( curfile->state < HTTP_CONNECTED ) // Connection not enstabilished
 		{
-			res = pConnect( curfile->socket, &addr, sizeof( struct sockaddr ) );
+			res = connect( curfile->socket, &addr, sizeof( struct sockaddr ) );
 
 			if( res )
 			{
-				if( pWSAGetLastError() == WSAEINPROGRESS || pWSAGetLastError() == WSAEWOULDBLOCK ) // Should give EWOOLDBLOCK if try recv too soon
+				if( WSAGetLastError() == WSAEINPROGRESS || WSAGetLastError() == WSAEWOULDBLOCK ) // Should give EWOOLDBLOCK if try recv too soon
 					curfile->state = HTTP_CONNECTED;
 				else
 				{
 					Con_Printf( S_ERROR "cannot connect to server: %s\n", NET_ErrorString( ) );
 					HTTP_FreeFile( curfile, true ); // Cannot connect
-					continue;
+					break;
 				}
 				continue; // skip to next file
 			}
@@ -2316,12 +2212,12 @@ void HTTP_Run( void )
 
 			while( curfile->bytes_sent < curfile->query_length )
 			{
-				res = pSend( curfile->socket, curfile->buf + curfile->bytes_sent, curfile->query_length - curfile->bytes_sent, 0 );
+				res = send( curfile->socket, curfile->buf + curfile->bytes_sent, curfile->query_length - curfile->bytes_sent, 0 );
 
 
 				if( res < 0 )
 				{
-					if( pWSAGetLastError() != WSAEWOULDBLOCK && pWSAGetLastError() != WSAENOTCONN )
+					if( WSAGetLastError() != WSAEWOULDBLOCK && WSAGetLastError() != WSAENOTCONN )
 					{
 						Con_Printf( S_ERROR "failed to send request: %s\n", NET_ErrorString() );
 						HTTP_FreeFile( curfile, true );
@@ -2357,7 +2253,7 @@ void HTTP_Run( void )
 		}
 
 		if( !HTTP_ProcessStream( curfile ) )
-			continue;
+			break;
 
 		if( curfile->size > 0 )
 		{
@@ -2368,9 +2264,9 @@ void HTTP_Run( void )
 		if( curfile->size > 0 && curfile->downloaded >= curfile->size )
 		{
 			HTTP_FreeFile( curfile, false ); // success
-			continue;
+			break;
 		}
-		else if( pWSAGetLastError() != WSAEWOULDBLOCK )
+		else if( (WSAGetLastError() != WSAEWOULDBLOCK) && (WSAGetLastError() != WSAEINPROGRESS) )
 			Con_Reportf( "problem downloading %s:\n%s\n", curfile->path, NET_ErrorString() );
 		else
 			curfile->blocktime += host.frametime;
@@ -2379,7 +2275,7 @@ void HTTP_Run( void )
 		{
 			Con_Printf( S_ERROR "timeout on receiving data!\n");
 			HTTP_FreeFile( curfile, true );
-			continue;
+			break;
 		}
 	}
 
@@ -2557,7 +2453,7 @@ static void HTTP_Clear_f( void )
 			FS_Close( file->file );
 
 		if( file->socket != -1 )
-			pCloseSocket ( file->socket );
+			closesocket( file->socket );
 
 		Mem_Free( file );
 	}
@@ -2700,5 +2596,5 @@ void HTTP_Shutdown( void )
 		Mem_Free( tmp );
 	}
 
-	http.last_server = 0;
+	http.last_server = NULL;
 }

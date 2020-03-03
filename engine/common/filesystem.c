@@ -13,16 +13,21 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#include "build.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
-#ifdef _WIN32
+#if XASH_WIN32
 #include <direct.h>
 #include <io.h>
+#elif XASH_DOS4GW
+#include <direct.h>
+#include <errno.h>
 #else
 #include <dirent.h>
 #include <errno.h>
 #endif
+#include "miniz.h" // header-only zlib replacement
 #include "common.h"
 #include "wadfile.h"
 #include "filesystem.h"
@@ -51,6 +56,14 @@ GNU General Public License for more details.
 #define WAD_LOAD_NO_FILES		5
 #define WAD_LOAD_CORRUPTED		6
 
+// ZIP errors
+#define ZIP_LOAD_OK			0
+#define ZIP_LOAD_COULDNT_OPEN		1
+#define ZIP_LOAD_BAD_HEADER		2
+#define ZIP_LOAD_BAD_FOLDERS		3
+#define ZIP_LOAD_NO_FILES		5
+#define ZIP_LOAD_CORRUPTED		6
+
 typedef struct stringlist_s
 {
 	// maxstrings changes as needed, causing reallocation of strings[] array
@@ -62,10 +75,10 @@ typedef struct stringlist_s
 typedef struct wadtype_s
 {
 	char		*ext;
-	char		type;
+	signed char		type;
 } wadtype_t;
 
-typedef struct file_s
+struct file_s
 {
 	int		handle;			// file descriptor
 	fs_offset_t		real_length;		// uncompressed file size (for files opened in "read" mode)
@@ -76,9 +89,14 @@ typedef struct file_s
 						// contents buffer
 	fs_offset_t		buff_ind, buff_len;		// buffer current index and length
 	byte		buff[FILE_BUFF_SIZE];	// intermediate buffer
-} file_t;
+#ifdef XASH_REDUCE_FD
+	const char *backup_path;
+	fs_offset_t backup_position;
+	uint backup_options;
+#endif
+};
 
-typedef struct wfile_s
+struct wfile_s
 {
 	string		filename;
 	int		infotableofs;
@@ -87,7 +105,7 @@ typedef struct wfile_s
 	file_t		*handle;
 	dlumpinfo_t	*lumps;
 	time_t		filetime;
-} wfile_t;
+};
 
 typedef struct pack_s
 {
@@ -98,38 +116,122 @@ typedef struct pack_s
 	dpackfile_t	*files;
 } pack_t;
 
+typedef struct zipfile_s
+{
+	char		name[MAX_SYSPATH];
+	fs_offset_t	offset; // offset of local file header
+	fs_offset_t	size; //original file size
+	fs_offset_t	compressed_size; // compressed file size
+	unsigned short flags;
+} zipfile_t;
+
+typedef struct zip_s
+{
+	string		filename;
+	int		handle;
+	int		numfiles;
+	time_t		filetime;
+	zipfile_t	*files;
+} zip_t;
+
 typedef struct searchpath_s
 {
 	string		filename;
 	pack_t		*pack;
 	wfile_t		*wad;
+	zip_t		*zip;
 	int		flags;
 	struct searchpath_s *next;
 } searchpath_t;
 
-byte			*fs_mempool;
-searchpath_t		*fs_searchpaths = NULL;	// chain
-searchpath_t		fs_directpath;		// static direct path
-char			fs_basedir[MAX_SYSPATH];	// base game directory
-char			fs_gamedir[MAX_SYSPATH];	// game current directory
-char			fs_writedir[MAX_SYSPATH];	// path that game allows to overwrite, delete and rename files (and create new of course)
+static byte			*fs_mempool;
+static searchpath_t		*fs_searchpaths = NULL;	// chain
+static searchpath_t		fs_directpath;		// static direct path
+static char			fs_basedir[MAX_SYSPATH];	// base game directory
+static char			fs_gamedir[MAX_SYSPATH];	// game current directory
+static char			fs_writedir[MAX_SYSPATH];	// path that game allows to overwrite, delete and rename files (and create new of course)
 
-qboolean		fs_ext_path = false;	// attempt to read\write from ./ or ../ pathes
-#ifndef _WIN32
-qboolean		fs_caseinsensitive = true; // try to search missing files
+static qboolean		fs_ext_path = false;	// attempt to read\write from ./ or ../ pathes
+#if !XASH_WIN32
+static qboolean		fs_caseinsensitive = true; // try to search missing files
 #endif
 
+#ifdef XASH_REDUCE_FD
+static file_t *fs_last_readfile;
+static zip_t *fs_last_zip;
+static pack_t *fs_last_pak;
+
+static void FS_EnsureOpenFile( file_t *file )
+{
+	if( fs_last_readfile == file )
+		return;
+
+	if( file && !file->backup_path )
+		return;
+
+	if( fs_last_readfile && (fs_last_readfile->handle != -1) )
+	{
+		fs_last_readfile->backup_position = lseek(  fs_last_readfile->handle, 0, SEEK_CUR );
+		close( fs_last_readfile->handle );
+		fs_last_readfile->handle = -1;
+	}
+	fs_last_readfile = file;
+	if( file && (file->handle == -1) )
+	{
+		file->handle = open( file->backup_path, file->backup_options );
+		lseek( file->handle, file->backup_position, SEEK_SET );
+	}
+}
+
+static void FS_EnsureOpenZip( zip_t *zip )
+{
+	if( fs_last_zip == zip )
+		return;
+
+	if( fs_last_zip && (fs_last_zip->handle != -1) )
+	{
+		close( fs_last_zip->handle );
+		fs_last_zip->handle = -1;
+	}
+	fs_last_zip = zip;
+	if( zip && (zip->handle == -1) )
+		zip->handle = open( zip->filename, O_RDONLY|O_BINARY );
+}
+
+static void FS_BackupFileName( file_t *file, const char *path, uint options )
+{
+	if( path == NULL )
+	{
+		if( file->backup_path )
+			Mem_Free( (void*)file->backup_path );
+		if( file == fs_last_readfile )
+			FS_EnsureOpenFile( NULL );
+	}
+	else if( options == O_RDONLY || options == (O_RDONLY|O_BINARY) )
+	{
+		file->backup_path = copystring( path );
+		file->backup_options = options;
+	}
+}
+
+
+#else
+static void FS_EnsureOpenFile( file_t *file ) {}
+static void FS_EnsureOpenZip( zip_t *zip ) {}
+static void FS_BackupFileName( file_t *file, const char *path, uint options ) {}
+#endif
 
 static void FS_InitMemory( void );
 static searchpath_t *FS_FindFile( const char *name, int *index, qboolean gamedironly );
-static dlumpinfo_t *W_FindLump( wfile_t *wad, const char *name, const char matchtype );
+static dlumpinfo_t *W_FindLump( wfile_t *wad, const char *name, const signed char matchtype );
 static dpackfile_t *FS_AddFileToPack( const char* name, pack_t *pack, fs_offset_t offset, fs_offset_t size );
+void Zip_Close( zip_t *zip );
 static byte *W_LoadFile( const char *path, fs_offset_t *filesizeptr, qboolean gamedironly );
 static wfile_t *W_Open( const char *filename, int *errorcode );
 static qboolean FS_SysFolderExists( const char *path );
 static int FS_SysFileTime( const char *filename );
-static char W_TypeFromExt( const char *lumpname );
-static const char *W_ExtFromType( char lumptype );
+static signed char W_TypeFromExt( const char *lumpname );
+static const char *W_ExtFromType( signed char lumptype );
 static void FS_Purge( file_t* file );
 
 /*
@@ -139,55 +241,6 @@ FILEMATCH COMMON SYSTEM
 
 =============================================================================
 */
-static int matchpattern( const char *str, const char *cmp, qboolean caseinsensitive )
-{
-	int	c1, c2;
-
-	while( *cmp )
-	{
-		switch( *cmp )
-		{
-		case 0:   return 1; // end of pattern
-		case '?': // match any single character
-			if( *str == 0 || *str == '/' || *str == '\\' || *str == ':' )
-				return 0; // no match
-			str++;
-			cmp++;
-			break;
-		case '*': // match anything until following string
-			if( !*str ) return 1; // match
-			cmp++;
-			while( *str )
-			{
-				if( *str == '/' || *str == '\\' || *str == ':' )
-					break;
-				// see if pattern matches at this offset
-				if( matchpattern( str, cmp, caseinsensitive ))
-					return 1;
-				// nope, advance to next offset
-				str++;
-			}
-			break;
-		default:
-			if( *str != *cmp )
-			{
-				if( !caseinsensitive )
-					return 0; // no match
-				c1 = Q_tolower( *str );
-				c2 = Q_tolower( *cmp );
-				if( c1 != c2 ) return 0; // no match
-			}
-
-			str++;
-			cmp++;
-			break;
-		}
-	}
-
-	// reached end of pattern but not end of input?
-	return (*str) ? 0 : 1;
-}
-
 static void stringlistinit( stringlist_t *list )
 {
 	memset( list, 0, sizeof( *list ));
@@ -268,7 +321,7 @@ static void listdirectory( stringlist_t *list, const char *path, qboolean lowerc
 {
 	int		i;
 	signed char *c;
-#ifdef _WIN32
+#if XASH_WIN32
 	char pattern[4096];
 	struct _finddata_t	n_file;
 	int		hFile;
@@ -277,7 +330,7 @@ static void listdirectory( stringlist_t *list, const char *path, qboolean lowerc
 	struct dirent *entry;
 #endif
 
-#ifdef _WIN32
+#if XASH_WIN32
 	Q_snprintf( pattern, sizeof( pattern ), "%s*", path );
 
 	// ask for the directory listing handle
@@ -300,11 +353,9 @@ static void listdirectory( stringlist_t *list, const char *path, qboolean lowerc
 	closedir( dir );
 #endif
 
-	// seems not needed anymore
-#if 0
-	// convert names to lowercase because windows doesn't care, but pattern matching code often does
-	if( lowercase )
-		listlowercase( list );
+#if XASH_DOS4GW
+	// convert names to lowercase because 8.3 always in CAPS
+	listlowercase( list );
 #endif
 }
 
@@ -315,6 +366,7 @@ OTHER PRIVATE FUNCTIONS
 
 =============================================================================
 */
+
 /*
 ==================
 FS_FixFileCase
@@ -324,7 +376,36 @@ emulate WIN32 FS behaviour when opening local file
 */
 static const char *FS_FixFileCase( const char *path )
 {
-#if !defined _WIN32 && !TARGET_OS_IPHONE // assume case insensitive
+#if defined __DOS__ & !defined __WATCOM_LFN__
+	// not fix, but convert to 8.3 CAPS and rotate slashes
+	// it is still recommended to package game data
+	static char out[PATH_MAX];
+	int i = 0;
+	int last = 0;
+	while(*path)
+	{
+		char c = *path++;
+
+		if(c == '/') c = '\\';
+		else c = toupper(c);
+		out[i++] = c;
+		if(c == '\\' || c == '.')
+		{
+			if( i - last > 8 )
+			{
+				char *l = &out[last];
+				l[6] = '~';
+				l[7] = '1';
+				l[8] = c;
+				i = last + 9;
+			}
+			last = i;
+		}
+	}
+
+	out[i] = 0;
+	return out;
+#elif !XASH_WIN32 && !XASH_IOS // assume case insensitive
 	DIR *dir; struct dirent *entry;
 	char path2[PATH_MAX], *fname;
 
@@ -466,6 +547,7 @@ void FS_Path_f( void )
 	{
 		if( s->pack ) Con_Printf( "%s (%i files)", s->pack->filename, s->pack->numfiles );
 		else if( s->wad ) Con_Printf( "%s (%i files)", s->wad->filename, s->wad->numlumps );
+		else if( s->zip ) Con_Printf( "%s (%i files)", s->zip->filename, s->zip->numfiles );
 		else Con_Printf( "%s", s->filename );
 
 		if( s->flags & FS_GAMERODIR_PATH ) Con_Printf( " ^2rodir^7" );
@@ -510,7 +592,7 @@ pack_t *FS_LoadPackPAK( const char *packfile, int *error )
 
 	packhandle = open( packfile, O_RDONLY|O_BINARY );
 
-#ifndef _WIN32
+#if !XASH_WIN32
 	if( packhandle < 0 )
 	{
 		const char *fpackfile = FS_FixFileCase( packfile );
@@ -585,10 +667,329 @@ pack_t *FS_LoadPackPAK( const char *packfile, int *error )
 	for( i = 0; i < numpackfiles; i++ )
 		FS_AddFileToPack( info[i].name, pack, info[i].filepos, info[i].filelen );
 
+#ifdef XASH_REDUCE_FD
+	// will reopen when needed
+	close(pack->handle);
+	pack->handle = -1;
+#endif
+
 	if( error ) *error = PAK_LOAD_OK;
 	Mem_Free( info );
 
 	return pack;
+}
+
+static zip_t *FS_LoadZip( const char *zipfile, int *error )
+{
+	int		  numpackfiles = 0, i;
+	zip_cdf_header_t  header_cdf;
+	zip_header_eocd_t header_eocd;
+	uint		  signature;
+	fs_offset_t	  filepos = 0, length;
+	zipfile_t	  *info = NULL;
+	char		  filename_buffer[MAX_SYSPATH];
+	zip_t *zip = (zip_t *)Mem_Calloc( fs_mempool, sizeof( zip_t ) );
+
+	zip->handle = open( zipfile, O_RDONLY|O_BINARY );
+
+#if !XASH_WIN32
+	if( zip->handle < 0 )
+	{
+		const char *fzipfile = FS_FixFileCase( zipfile );
+		if( fzipfile != zipfile )
+			zip->handle = open( fzipfile, O_RDONLY|O_BINARY );
+	}
+#endif
+
+	if( zip->handle < 0 )
+	{
+		Con_Reportf( S_ERROR "%s couldn't open\n", zipfile );
+
+		if( error )
+			*error = ZIP_LOAD_COULDNT_OPEN;
+
+		Zip_Close( zip );
+		return NULL;
+	}
+
+	length = lseek( zip->handle, 0, SEEK_END );
+
+	if( length > UINT_MAX )
+	{
+		Con_Reportf( S_ERROR "%s bigger than 4GB.\n", zipfile );
+
+		if( error )
+			*error = ZIP_LOAD_COULDNT_OPEN;
+
+		Zip_Close( zip );
+		return NULL;
+	}
+
+	lseek( zip->handle, 0, SEEK_SET );
+
+	read( zip->handle, &signature, sizeof( signature ) );
+
+	if( signature == ZIP_HEADER_EOCD )
+	{
+		Con_Reportf( S_WARN "%s has no files. Ignored.\n", zipfile );
+
+		if( error )
+			*error = ZIP_LOAD_NO_FILES;
+
+		Zip_Close( zip );
+		return NULL;
+	}
+
+	if( signature != ZIP_HEADER_LF )
+	{
+		Con_Reportf( S_ERROR "%s is not a zip file. Ignored.\n", zipfile );
+
+		if( error )
+			*error = ZIP_LOAD_BAD_HEADER;
+
+		Zip_Close( zip );
+		return NULL;
+	}
+
+	// Find oecd
+	lseek( zip->handle, 0, SEEK_SET );
+	filepos = length;
+
+	while ( filepos > 0 )
+	{
+		lseek( zip->handle, filepos, SEEK_SET );
+		read( zip->handle, &signature, sizeof( signature ) );
+
+		if( signature == ZIP_HEADER_EOCD )
+			break;
+
+		filepos -= sizeof( char ); // step back one byte
+	}
+
+	if( ZIP_HEADER_EOCD != signature )
+	{
+		Con_Reportf( S_ERROR "cannot find EOCD in %s. Zip file corrupted.\n", zipfile );
+
+		if( error )
+			*error = ZIP_LOAD_BAD_HEADER;
+
+		Zip_Close( zip );
+		return NULL;
+	}
+
+	read( zip->handle, &header_eocd, sizeof( zip_header_eocd_t ) );
+
+	// Move to CDF start
+	lseek( zip->handle, header_eocd.central_directory_offset, SEEK_SET );
+
+	// Calc count of files in archive
+	info = (zipfile_t *)Mem_Calloc( fs_mempool, sizeof( zipfile_t ) * header_eocd.total_central_directory_record );
+
+	for( i = 0; i < header_eocd.total_central_directory_record; i++ )
+	{
+		read( zip->handle, &header_cdf, sizeof( header_cdf ) );
+
+		if( header_cdf.signature != ZIP_HEADER_CDF )
+		{
+			Con_Reportf( S_ERROR "CDF signature mismatch in %s. Zip file corrupted.\n", zipfile );
+
+			if( error )
+				*error = ZIP_LOAD_BAD_HEADER;
+
+			Mem_Free( info );
+			Zip_Close( zip );
+			return NULL;
+		}
+
+		if( header_cdf.uncompressed_size && header_cdf.filename_len && ( header_cdf.filename_len < MAX_SYSPATH ) )
+		{
+			memset( &filename_buffer, '\0', MAX_SYSPATH );
+			read( zip->handle, &filename_buffer, header_cdf.filename_len );
+			Q_strncpy( info[numpackfiles].name, filename_buffer, MAX_SYSPATH );
+
+			info[numpackfiles].size = header_cdf.uncompressed_size;
+			info[numpackfiles].compressed_size = header_cdf.compressed_size;
+			info[numpackfiles].offset = header_cdf.local_header_offset;
+			numpackfiles++;
+		}
+		else
+			lseek( zip->handle, header_cdf.filename_len, SEEK_CUR );
+
+		if( header_cdf.extrafield_len )
+			lseek( zip->handle, header_cdf.extrafield_len, SEEK_CUR );
+
+		if( header_cdf.file_commentary_len )
+			lseek( zip->handle, header_cdf.file_commentary_len, SEEK_CUR );
+	}
+
+	// recalculate offsets
+	for( i = 0; i < numpackfiles; i++ )
+	{
+		zip_header_t header;
+
+		lseek( zip->handle, info[i].offset, SEEK_SET );
+		read( zip->handle, &header, sizeof( header ) );
+		info[i].flags = header.compression_flags;
+		info[i].offset = info[i].offset + header.filename_len + header.extrafield_len + sizeof( header );
+	}
+
+	Q_strncpy( zip->filename, zipfile, sizeof( zip->filename ) );
+	zip->filetime = FS_SysFileTime( zipfile );
+	zip->numfiles = numpackfiles;
+	zip->files = info;
+
+#ifdef XASH_REDUCE_FD
+	// will reopen when needed
+	close(zip->handle);
+	zip->handle = -1;
+#endif
+
+	if( error )
+		*error = ZIP_LOAD_OK;
+
+	return zip;
+}
+
+void Zip_Close( zip_t *zip )
+{
+	if( !zip )
+		return;
+
+	Mem_Free( zip->files );
+
+	FS_EnsureOpenZip( NULL );
+
+	if( zip->handle >= 0 )
+		close( zip->handle );
+
+	Mem_Free( zip );
+}
+
+static byte *Zip_LoadFile( const char *path, fs_offset_t *sizeptr, qboolean gamedironly )
+{
+	searchpath_t	*search;
+	int		index;
+	zipfile_t	*file = NULL;
+	byte		*compressed_buffer = NULL, *decompressed_buffer = NULL;
+	int		zlib_result = 0;
+	dword		test_crc, final_crc;
+	z_stream	decompress_stream;
+
+	if( sizeptr ) *sizeptr = 0;
+
+	search = FS_FindFile( path, &index, gamedironly );
+
+	if( !search || !search->zip )
+		return  NULL;
+
+	file = &search->zip->files[index];
+
+	FS_EnsureOpenZip( search->zip );
+
+	if( lseek( search->zip->handle, file->offset, SEEK_SET ) == -1 )
+		return NULL;
+
+	/*if( read( search->zip->handle, &header, sizeof( header ) ) < 0 )
+		return NULL;
+
+	if( header.signature != ZIP_HEADER_LF )
+	{
+		Con_Reportf( S_ERROR "Zip_LoadFile: %s signature error\n", file->name );
+		return NULL;
+	}*/
+
+	if( file->flags == ZIP_COMPRESSION_NO_COMPRESSION )
+	{
+		decompressed_buffer = Mem_Malloc( fs_mempool, file->size + 1 );
+		decompressed_buffer[file->size] = '\0';
+
+		read( search->zip->handle, decompressed_buffer, file->size );
+#if 0
+		CRC32_Init( &test_crc );
+		CRC32_ProcessBuffer( &test_crc, decompressed_buffer, file->size );
+
+		final_crc = CRC32_Final( test_crc );
+
+		if( final_crc != file->crc32 )
+		{
+			Con_Reportf( S_ERROR "Zip_LoadFile: %s file crc32 mismatch\n", file->name );
+			Mem_Free( decompressed_buffer );
+			return NULL;
+		}
+#endif
+		if( sizeptr ) *sizeptr = file->size;
+
+		FS_EnsureOpenZip( NULL );
+		return decompressed_buffer;
+	}
+	else if( file->flags == ZIP_COMPRESSION_DEFLATED )
+	{
+		compressed_buffer = Mem_Malloc( fs_mempool, file->compressed_size + 1 );
+		decompressed_buffer = Mem_Malloc( fs_mempool, file->size + 1 );
+		decompressed_buffer[file->size] = '\0';
+
+		read( search->zip->handle, compressed_buffer, file->compressed_size );
+
+		memset( &decompress_stream, 0, sizeof( decompress_stream ) );
+
+		decompress_stream.total_in = decompress_stream.avail_in = file->compressed_size;
+		decompress_stream.next_in = (Bytef *)compressed_buffer;
+		decompress_stream.total_out = decompress_stream.avail_out = file->size;
+		decompress_stream.next_out = (Bytef *)decompressed_buffer;
+
+		decompress_stream.zalloc = Z_NULL;
+		decompress_stream.zfree = Z_NULL;
+		decompress_stream.opaque = Z_NULL;
+
+		if( inflateInit2( &decompress_stream, -MAX_WBITS ) != Z_OK )
+		{
+			Con_Printf( S_ERROR "Zip_LoadFile: inflateInit2 failed\n" );
+			Mem_Free( compressed_buffer );
+			Mem_Free( decompressed_buffer );
+			return NULL;
+		}
+
+		zlib_result = inflate( &decompress_stream, Z_NO_FLUSH );
+		inflateEnd( &decompress_stream );
+
+		if( zlib_result == Z_OK || zlib_result == Z_STREAM_END )
+		{
+			Mem_Free( compressed_buffer ); // finaly free compressed buffer
+#if 0
+			CRC32_Init( &test_crc );
+			CRC32_ProcessBuffer( &test_crc, decompressed_buffer, file->size );
+
+			final_crc = CRC32_Final( test_crc );
+
+			if( final_crc != file->crc32 )
+			{
+				Con_Reportf( S_ERROR "Zip_LoadFile: %s file crc32 mismatch\n", file->name );
+				Mem_Free( decompressed_buffer );
+				return NULL;
+			}
+#endif
+			if( sizeptr ) *sizeptr = file->size;
+
+			FS_EnsureOpenZip( NULL );
+			return decompressed_buffer;
+		}
+		else
+		{
+			Con_Reportf( S_ERROR "Zip_LoadFile: %s : error while file decompressing. Zlib return code %d.\n", file->name, zlib_result );
+			Mem_Free( compressed_buffer );
+			Mem_Free( decompressed_buffer );
+			return NULL;
+		}
+
+	}
+	else
+	{
+		Con_Reportf( S_ERROR "Zip_LoadFile: %s : file compressed with unknown algorithm.\n", file->name );
+		return NULL;
+	}
+
+	FS_EnsureOpenZip( NULL );
+	return NULL;
 }
 
 /*
@@ -611,7 +1012,7 @@ static qboolean FS_AddWad_Fullpath( const char *wadfile, qboolean *already_loade
 			return true; // already loaded
 		}
 	}
-          
+
 	if( already_loaded )
 		*already_loaded = false;
 
@@ -690,7 +1091,7 @@ static qboolean FS_AddPak_Fullpath( const char *pakfile, qboolean *already_loade
 		{
 			if( !Q_stricmp( COM_FileExtension( pak->files[i].name ), "wad" ))
 			{
-				Q_sprintf( fullpath, "%s/%s", pakfile, pak->files[i].name );
+				Q_snprintf( fullpath, MAX_STRING, "%s/%s", pakfile, pak->files[i].name );
 				FS_AddWad_Fullpath( fullpath, NULL, flags );
 			}
 		}
@@ -701,6 +1102,59 @@ static qboolean FS_AddPak_Fullpath( const char *pakfile, qboolean *already_loade
 	{
 		if( errorcode != PAK_LOAD_NO_FILES )
 			Con_Reportf( S_ERROR "FS_AddPak_Fullpath: unable to load pak \"%s\"\n", pakfile );
+		return false;
+	}
+}
+
+qboolean FS_AddZip_Fullpath( const char *zipfile, qboolean *already_loaded, int flags )
+{
+	searchpath_t	*search;
+	zip_t		*zip = NULL;
+	const char	*ext = COM_FileExtension( zipfile );
+	int		errorcode = ZIP_LOAD_COULDNT_OPEN;
+  
+	for( search = fs_searchpaths; search; search = search->next )
+	{
+		if( search->pack && !Q_stricmp( search->pack->filename, zipfile ))
+		{
+			if( already_loaded ) *already_loaded = true;
+			return true; // already loaded
+		}
+	}
+  
+	if( already_loaded ) *already_loaded = false;
+  
+	if( !Q_stricmp( ext, "zip" ) || !Q_stricmp( ext, "pk3" ) )
+		zip = FS_LoadZip( zipfile, &errorcode );
+  
+	if( zip )
+	{
+		string	fullpath;
+		int i;
+
+		search = (searchpath_t *)Mem_Calloc( fs_mempool, sizeof( searchpath_t ) );
+		search->zip = zip;
+		search->next = fs_searchpaths;
+		search->flags |= flags;
+		fs_searchpaths = search;
+
+		Con_Reportf( "Adding zipfile: %s (%i files)\n", zipfile, zip->numfiles );
+
+		// time to add in search list all the wads that contains in current pakfile (if do)
+		for( i = 0; i < zip->numfiles; i++ )
+		{
+			if( !Q_stricmp( COM_FileExtension( zip->files[i].name ), "wad" ))
+			{
+				Q_snprintf( fullpath, MAX_STRING, "%s/%s", zipfile, zip->files[i].name );
+				FS_AddWad_Fullpath( fullpath, NULL, flags );
+			}
+		}
+		return true;
+	}
+	else
+	{
+		if( errorcode != ZIP_LOAD_NO_FILES )
+			Con_Reportf( S_ERROR "FS_AddZip_Fullpath: unable to load zip \"%s\"\n", zipfile );
 		return false;
 	}
 }
@@ -722,7 +1176,6 @@ void FS_AddGameDirectory( const char *dir, uint flags )
 
 	if( !FBitSet( flags, FS_NOWRITE_PATH ))
 		Q_strncpy( fs_writedir, dir, sizeof( fs_writedir ));
-
 	stringlistinit( &list );
 	listdirectory( &list, dir, false );
 	stringlistsort( &list );
@@ -736,6 +1189,16 @@ void FS_AddGameDirectory( const char *dir, uint flags )
 			FS_AddPak_Fullpath( fullpath, NULL, flags );
 		}
 	}
+
+	// add any Zip package in the directory
+	for( i = 0; i < list.numstrings; i++ )
+	{
+		if( !Q_stricmp( COM_FileExtension( list.strings[i] ), "zip" ) || !Q_stricmp( COM_FileExtension( list.strings[i] ), "pk3" ))
+		{
+			Q_sprintf( fullpath, "%s%s", dir, list.strings[i] );
+			FS_AddZip_Fullpath( fullpath, NULL, flags );
+		}
+	 }
 
 	FS_AllowDirectPaths( true );
 
@@ -839,12 +1302,19 @@ void FS_ClearSearchPath( void )
 		{
 			if( search->pack->files ) 
 				Mem_Free( search->pack->files );
+			if( search->pack->handle >= 0 )
+				close( search->pack->handle );
 			Mem_Free( search->pack );
 		}
 
 		if( search->wad )
 		{
 			W_Close( search->wad );
+		}
+
+		if( search->zip )
+		{
+			Zip_Close(search->zip);
 		}
 
 		Mem_Free( search );
@@ -907,15 +1377,10 @@ void FS_Rescan( void )
 
 	FS_ClearSearchPath();
 
-#if TARGET_OS_IPHONE
+#if XASH_IOS
 	{
 		FS_AddPak_Fullpath( va( "%sextras.pak", SDL_GetBasePath() ), NULL, extrasFlags );
 		FS_AddPak_Fullpath( va( "%sextras_%s.pak", SDL_GetBasePath(), GI->gamefolder ), NULL, extrasFlags );
-	}
-#elif defined(__SAILFISH__)
-	{
-		FS_AddPak_Fullpath( va( SHAREPATH"/extras.pak" ), NULL, extrasFlags );
-		FS_AddPak_Fullpath( va( SHAREPATH"/%s/extras.pak", GI->gamefolder ), NULL, extrasFlags );
 	}
 #else
 	if( ( str = getenv( "XASH3D_EXTRAS_PAK1" ) ) )
@@ -985,7 +1450,7 @@ static void FS_WriteGameInfo( const char *filepath, gameinfo_t *GameInfo )
 		FS_Printf( f, "version\t\t%g\n", GameInfo->version );
 
 	if( GameInfo->size != 0 )
-		FS_Printf( f, "size\t\t%i\n", GameInfo->size );
+		FS_Printf( f, "size\t\t%lu\n", GameInfo->size );
 
 	if( Q_strlen( GameInfo->game_url ))
 		FS_Printf( f, "url_info\t\t\"%s\"\n", GameInfo->game_url );
@@ -1078,7 +1543,6 @@ void FS_InitGameInfo( gameinfo_t *GameInfo, const char *gamedir )
 	Q_strncpy( GameInfo->game_dll, "dlls/hl.dll", sizeof( GameInfo->game_dll ));
 	Q_strncpy( GameInfo->game_dll_linux, "dlls/hl.so", sizeof( GameInfo->game_dll_linux ));
 	Q_strncpy( GameInfo->game_dll_osx, "dlls/hl.dylib", sizeof( GameInfo->game_dll_osx ));
-	Q_strncpy( GameInfo->client_lib, CLIENTDLL, sizeof( GameInfo->client_lib ));
 
 	// .ico path
 	Q_strncpy( GameInfo->iconpath, "game.ico", sizeof( GameInfo->iconpath ));
@@ -1204,7 +1668,7 @@ void FS_ParseGenericGameInfo( gameinfo_t *GameInfo, const char *buf, const qbool
 			pfile = COM_ParseFile( pfile, token );
 			GameInfo->max_edicts = Q_atoi( token );
 		}
-		else if( !Q_stricmp( token, "mpentity" ))
+		else if( !Q_stricmp( token, isGameInfo ? "mp_entity" : "mpentity" ))
 		{
 			pfile = COM_ParseFile( pfile, GameInfo->mp_entity );
 		}
@@ -1227,7 +1691,7 @@ void FS_ParseGenericGameInfo( gameinfo_t *GameInfo, const char *buf, const qbool
 		else if( !Q_stricmp( token, isGameInfo ? "max_edicts" : "edicts" ))
 		{
 			pfile = COM_ParseFile( pfile, token );
-			GameInfo->max_edicts = bound( 600, Q_atoi( token ), MAX_EDICTS );
+			GameInfo->max_edicts = bound( MIN_EDICTS, Q_atoi( token ), MAX_EDICTS );
 		}
 		// only for gameinfo
 		else if( isGameInfo )
@@ -1242,10 +1706,6 @@ void FS_ParseGenericGameInfo( gameinfo_t *GameInfo, const char *buf, const qbool
 			else if( !Q_stricmp( token, "sp_entity" ))
 			{
 				pfile = COM_ParseFile( pfile, GameInfo->sp_entity );
-			}
-			else if( !Q_stricmp( token, "clientlib" ))
-			{
-				pfile = COM_ParseFile( pfile, GameInfo->client_lib );
 			}
 			else if( isGameInfo && !Q_stricmp( token, "dllpath" ))
 			{
@@ -1342,7 +1802,7 @@ static qboolean FS_ParseLiblistGam( const char *filename, const char *gamedir, g
 	char	*afile;
 
 	if( !GameInfo ) return false;	
-	afile = FS_LoadFile( filename, NULL, false );
+	afile = (char *)FS_LoadFile( filename, NULL, false );
 	if( !afile ) return false;
 
 	FS_InitGameInfo( GameInfo, gamedir );
@@ -1385,7 +1845,7 @@ static qboolean FS_ReadGameInfo( const char *filepath, const char *gamedir, game
 {
 	char	*afile;
 
-	afile = FS_LoadFile( filepath, NULL, false );
+	afile = (char *)FS_LoadFile( filepath, NULL, false );
 	if( !afile ) return false;
 
 	FS_InitGameInfo( GameInfo, gamedir );
@@ -1456,7 +1916,7 @@ static qboolean FS_ParseGameInfo( const char *gamedir, gameinfo_t *GameInfo )
 		}
 		else if( roGameInfoTime > rwGameInfoTime )
 		{
-			char *afile_ro = FS_LoadDirectFile( filepath_ro, NULL );
+			char *afile_ro = (char *)FS_LoadDirectFile( filepath_ro, NULL );
 
 			if( afile_ro )
 			{
@@ -1530,25 +1990,15 @@ void FS_LoadGameInfo( const char *rootfolder )
 		Sys_Error( "Couldn't find game directory '%s'\n", fs_gamedir );
 
 	SI.GameInfo = SI.games[i];
+
 	if( !Sys_GetParmFromCmdLine( "-dll", SI.gamedll ) )
 	{
-#ifdef XASH_INTERNAL_GAMELIBS
-		Q_strncpy( SI.gamedll, "server", sizeof( SI.gamedll ) );
-#elif defined(_WIN32)
-		Q_strncpy( SI.gamedll, GI->game_dll, sizeof( SI.gamedll ) );
-#elif defined(__APPLE__)
-		Q_strncpy( SI.gamedll, GI->game_dll_osx, sizeof( SI.gamedll ) );
-#else
-		Q_strncpy( SI.gamedll, GI->game_dll_linux, sizeof( SI.gamedll ) );
-#endif
+		SI.gamedll[0] = 0;
 	}
+
 	if( !Sys_GetParmFromCmdLine( "-clientlib", SI.clientlib ) )
 	{
-#ifdef __ANDROID__
-		Q_strncpy( SI.clientlib, CLIENTDLL, sizeof( SI.clientlib ) );
-#else
-		Q_strncpy( SI.clientlib, GI->client_lib, sizeof( SI.clientlib ) );
-#endif
+		SI.clientlib[0] = 0;
 	}
 	
 	FS_Rescan(); // create new filesystem
@@ -1575,7 +2025,7 @@ void FS_Init( void )
 	Cmd_AddCommand( "fs_path", FS_Path_f, "show filesystem search pathes" );
 	Cmd_AddCommand( "fs_clearpaths", FS_ClearPaths_f, "clear filesystem search pathes" );
 
-#ifndef _WIN32
+#if !XASH_WIN32
 	if( Sys_CheckParm( "-casesensitive" ) )
 		fs_caseinsensitive = false;
 
@@ -1624,13 +2074,9 @@ void FS_Init( void )
 
 		for( i = 0; i < dirs.numstrings; i++ )
 		{
-			if( !FS_SysFolderExists( dirs.strings[i] ) || ( !Q_stricmp( dirs.strings[i], ".." ) && !fs_ext_path ))
-				continue;
-
-			// magic here is that dirs.strings don't contain full path
-			// so code below checks and creates folders in current directory(host.rootdir)
-			if( !FS_SysFolderExists( dirs.strings[i] ) )
-				FS_CreatePath( dirs.strings[i] );
+			// no need to check folders here, FS_CreatePath will not fail if path exists
+			// and listdirectory returns only really existing directories
+			FS_CreatePath( va( "%s" PATH_SPLITTER "%s/", host.rootdir, dirs.strings[i] ));
 		}
 
 		stringlistfreecontents( &dirs );
@@ -1773,13 +2219,17 @@ static file_t *FS_SysOpen( const char *filepath, const char *mode )
 
 	file->handle = open( filepath, mod|opt, 0666 );
 
-#ifndef _WIN32
+#if !XASH_WIN32
 	if( file->handle < 0 )
 	{
 		const char *ffilepath = FS_FixFileCase( filepath );
 		if( ffilepath != filepath )
 			file->handle = open( ffilepath, mod|opt, 0666 );
+		if( file->handle >= 0 )
+			FS_BackupFileName( file, ffilepath, mod|opt );
 	}
+	else
+		FS_BackupFileName( file, filepath, mod|opt );
 #endif
 
 	if( file->handle < 0 )
@@ -1788,11 +2238,59 @@ static file_t *FS_SysOpen( const char *filepath, const char *mode )
 		return NULL;
 	}
 
+
 	file->real_length = lseek( file->handle, 0, SEEK_END );
 
+	// uncomment do disable write
+	//if( opt & O_CREAT )
+	//	return NULL;
+
 	// For files opened in append mode, we start at the end of the file
-	if( mod & O_APPEND ) file->position = file->real_length;
+	if( opt & O_APPEND )  file->position = file->real_length;
 	else lseek( file->handle, 0, SEEK_SET );
+
+	return file;
+}
+/*
+static int FS_DuplicateHandle( const char *filename, int handle, fs_offset_t pos )
+{
+#ifdef HAVE_DUP
+	return dup( handle );
+#else
+	int newhandle = open( filename, O_RDONLY|O_BINARY );
+	lseek( newhandle, pos, SEEK_SET );
+	return newhandle;
+#endif
+}
+*/
+
+static file_t *FS_OpenHandle( const char *syspath, int handle, fs_offset_t offset, fs_offset_t len )
+{
+	file_t *file = (file_t *)Mem_Calloc( fs_mempool, sizeof( file_t ));
+#ifndef XASH_REDUCE_FD
+#ifdef HAVE_DUP
+	file->handle = dup( handle );
+#else
+	file->handle = open( syspath, O_RDONLY|O_BINARY );
+#endif
+
+	if( lseek( file->handle, offset, SEEK_SET ) == -1 )
+	{
+		Mem_Free( file );
+		return NULL;
+	}
+
+#else
+	file->backup_position = offset;
+	file->backup_path = copystring( syspath );
+	file->backup_options = O_RDONLY|O_BINARY;
+	file->handle = -1;
+#endif
+
+	file->real_length = len;
+	file->offset = offset;
+	file->position = 0;
+	file->ungetc = EOF;
 
 	return file;
 }
@@ -1807,27 +2305,29 @@ Open a packed file using its package file descriptor
 file_t *FS_OpenPackedFile( pack_t *pack, int pack_ind )
 {
 	dpackfile_t	*pfile;
-	int		dup_handle;
-	file_t		*file;
 
 	pfile = &pack->files[pack_ind];
 
-	if( lseek( pack->handle, pfile->filepos, SEEK_SET ) == -1 )
+	return FS_OpenHandle( pack->filename, pack->handle, pfile->filepos, pfile->filelen );
+}
+
+/*
+===========
+FS_OpenZipFile
+
+Open a packed file using its package file descriptor
+===========
+*/
+file_t *FS_OpenZipFile( zip_t *zip, int pack_ind )
+{
+	zipfile_t	*pfile;
+	pfile = &zip->files[pack_ind];
+
+	// compressed files handled in Zip_LoadFile
+	if( pfile->flags != ZIP_COMPRESSION_NO_COMPRESSION )
 		return NULL;
 
-	dup_handle = dup( pack->handle );
-
-	if( dup_handle < 0 )
-		return NULL;
-
-	file = (file_t *)Mem_Calloc( fs_mempool, sizeof( *file ));
-	file->handle = dup_handle;
-	file->real_length = pfile->filelen;
-	file->offset = pfile->filepos;
-	file->position = 0;
-	file->ungetc = EOF;
-
-	return file;
+	return FS_OpenHandle( zip->filename, zip->handle, pfile->offset, pfile->size );
 }
 
 /*
@@ -1839,7 +2339,7 @@ Look for a file in the filesystem only
 */
 qboolean FS_SysFileExists( const char *path, qboolean caseinsensitive )
 {
-#ifdef _WIN32
+#if XASH_WIN32
 	int desc;
 
 	if(( desc = open( path, O_RDONLY|O_BINARY )) < 0 )
@@ -1877,7 +2377,7 @@ Look for a existing folder
 */
 qboolean FS_SysFolderExists( const char *path )
 {
-#ifdef _WIN32
+#if XASH_WIN32
 	DWORD	dwFlags = GetFileAttributes( path );
 
 	return ( dwFlags != -1 ) && ( dwFlags & FILE_ATTRIBUTE_DIRECTORY );
@@ -1956,7 +2456,7 @@ static searchpath_t *FS_FindFile( const char *name, int *index, qboolean gamedir
 		else if( search->wad )
 		{
 			dlumpinfo_t	*lump;	
-			char		type = W_TypeFromExt( name );
+			signed char		type = W_TypeFromExt( name );
 			qboolean		anywadname = true;
 			string		wadname, wadfolder;
 			string		shortname;
@@ -1995,6 +2495,19 @@ static searchpath_t *FS_FindFile( const char *name, int *index, qboolean gamedir
 				return search;
 			}
 		}
+		else if( search->zip )
+		{
+			int i;
+			for( i = 0; search->zip->numfiles > i; i++)
+			{
+				if( !Q_stricmp( search->zip->files[i].name, name ) )
+				{
+					if( index )
+						*index = i;
+					return search;
+				}
+			}
+		}
 		else
 		{
 			char	netpath[MAX_SYSPATH];
@@ -2029,6 +2542,7 @@ static searchpath_t *FS_FindFile( const char *name, int *index, qboolean gamedir
 			return search;
 		}
 
+#if 0
 		// search for environment path
 		while( ( pEnvPath = getenv( "Path" ) ) )
 		{
@@ -2046,6 +2560,7 @@ static searchpath_t *FS_FindFile( const char *name, int *index, qboolean gamedir
 			}
 			pEnvPath += (end - pEnvPath) + 1; // move pointer
 		}
+#endif // 0
 	}
 
 	if( index != NULL )
@@ -2077,6 +2592,8 @@ file_t *FS_OpenReadFile( const char *filename, const char *mode, qboolean gamedi
 		return FS_OpenPackedFile( search->pack, pack_ind );
 	else if( search->wad )
 		return NULL; // let W_LoadFile get lump correctly
+	else if( search->zip )
+		return FS_OpenZipFile( search->zip, pack_ind );
 	else if( pack_ind < 0 )
 	{
 		char	path [MAX_SYSPATH];
@@ -2141,8 +2658,11 @@ int FS_Close( file_t *file )
 {
 	if( !file ) return 0;
 
-	if( close( file->handle ))
-		return EOF;
+	FS_BackupFileName( file, NULL, 0 );
+
+	if( file->handle >= 0 )
+		if( close( file->handle ))
+			return EOF;
 
 	Mem_Free( file );
 	return 0;
@@ -2221,6 +2741,7 @@ fs_offset_t FS_Read( file_t *file, void *buffer, size_t buffersize )
 
 	// NOTE: at this point, the read buffer is always empty
 
+	FS_EnsureOpenFile( file );
 	// we must take care to not read after the end of the file
 	count = file->real_length - file->position;
 
@@ -2430,6 +2951,7 @@ int FS_Seek( file_t *file, fs_offset_t offset, int whence )
 		return 0;
 	}
 
+	FS_EnsureOpenFile( file );
 	// Purge cached data
 	FS_Purge( file );
 
@@ -2499,6 +3021,7 @@ byte *FS_LoadFile( const char *path, fs_offset_t *filesizeptr, qboolean gamediro
 	if( file )
 	{
 		filesize = file->real_length;
+
 		buf = (byte *)Mem_Malloc( fs_mempool, filesize + 1 );
 		buf[filesize] = '\0';
 		FS_Read( file, buf, filesize );
@@ -2507,12 +3030,78 @@ byte *FS_LoadFile( const char *path, fs_offset_t *filesizeptr, qboolean gamediro
 	else
 	{
 		buf = W_LoadFile( path, &filesize, gamedironly );
+
+		if( !buf )
+			buf = Zip_LoadFile( path, &filesize, gamedironly );
+
 	}
 
 	if( filesizeptr )
 		*filesizeptr = filesize;
 
 	return buf;
+}
+
+qboolean CRC32_File( dword *crcvalue, const char *filename )
+{
+	char	buffer[1024];
+	int	num_bytes;
+	file_t	*f;
+
+	f = FS_Open( filename, "rb", false );
+	if( !f ) return false;
+
+	Assert( crcvalue != NULL );
+	CRC32_Init( crcvalue );
+
+	while( 1 )
+	{
+		num_bytes = FS_Read( f, buffer, sizeof( buffer ));
+
+		if( num_bytes > 0 )
+			CRC32_ProcessBuffer( crcvalue, buffer, num_bytes );
+
+		if( FS_Eof( f )) break;
+	}
+
+	FS_Close( f );
+	return true;
+}
+
+qboolean MD5_HashFile( byte digest[16], const char *pszFileName, uint seed[4] )
+{
+	file_t		*file;
+	byte		buffer[1024];
+	MD5Context_t	MD5_Hash;
+	int		bytes;
+
+	if(( file = FS_Open( pszFileName, "rb", false )) == NULL )
+		return false;
+
+	memset( &MD5_Hash, 0, sizeof( MD5Context_t ));
+
+	MD5Init( &MD5_Hash );
+
+	if( seed )
+	{
+		MD5Update( &MD5_Hash, (const byte *)seed, 16 );
+	}
+
+	while( 1 )
+	{
+		bytes = FS_Read( file, buffer, sizeof( buffer ));
+
+		if( bytes > 0 )
+			MD5Update( &MD5_Hash, buffer, bytes );
+
+		if( FS_Eof( file ))
+			break;
+	}
+
+	FS_Close( file );
+	MD5Final( digest, &MD5_Hash );
+
+	return true;
 }
 
 /*
@@ -2589,7 +3178,7 @@ FS_FileExists
 Look for a file in the packages and in the filesystem
 ==================
 */
-int FS_FileExists( const char *filename, int gamedironly )
+int GAME_EXPORT FS_FileExists( const char *filename, int gamedironly )
 {
 	if( FS_FindFile( filename, NULL, gamedironly ))
 		return true;
@@ -2775,6 +3364,8 @@ int FS_FileTime( const char *filename, qboolean gamedironly )
 		return search->pack->filetime;
 	else if( search->wad ) // grab wad filetime
 		return search->wad->filetime;
+	else if( search->zip )
+		return search->zip->filetime;
 	else if( pack_ind < 0 )
 	{
 		// found in the filesystem?
@@ -2820,7 +3411,7 @@ FS_Delete
 delete specified file from gamefolder
 ==================
 */
-qboolean FS_Delete( const char *path )
+qboolean GAME_EXPORT FS_Delete( const char *path )
 {
 	char	real_path[MAX_SYSPATH];
 	qboolean	iRet;
@@ -2952,7 +3543,7 @@ search_t *FS_Search( const char *pattern, int caseinsensitive, int gamedironly )
 		else if( searchpath->wad )
 		{
 			string	wadpattern, wadname, temp2;
-			char	type = W_TypeFromExt( pattern );
+			signed char	type = W_TypeFromExt( pattern );
 			qboolean	anywadname = true;
 			string	wadfolder;
 
@@ -3118,7 +3709,7 @@ W_TypeFromExt
 Extracts file type from extension
 ===========
 */
-static char W_TypeFromExt( const char *lumpname )
+static signed char W_TypeFromExt( const char *lumpname )
 {
 	const char	*ext = COM_FileExtension( lumpname );
 	const wadtype_t	*type;
@@ -3142,7 +3733,7 @@ W_ExtFromType
 Convert type to extension
 ===========
 */
-static const char *W_ExtFromType( char lumptype )
+static const char *W_ExtFromType( signed char lumptype )
 {
 	const wadtype_t	*type;
 
@@ -3165,7 +3756,7 @@ W_FindLump
 Serach for already existed lump
 ===========
 */
-static dlumpinfo_t *W_FindLump( wfile_t *wad, const char *name, const char matchtype )
+static dlumpinfo_t *W_FindLump( wfile_t *wad, const char *name, const signed char matchtype )
 {
 	int	left, right;
 

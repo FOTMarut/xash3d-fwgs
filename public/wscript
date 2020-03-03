@@ -12,8 +12,8 @@ def options(opt):
 	return
 
 def configure(conf):
-	# public is part of shared libraries
-	conf.env.CFLAGS += conf.env.CFLAGS_cshlib
+	# stub
+	return
 
 def build(bld):
 	source = bld.path.ant_glob(['*.c'])
@@ -26,6 +26,5 @@ def build(bld):
 		features = 'c cshlib',
 		includes = includes,
 		use      = libs,
-		install_path = bld.env.LIBDIR,
 		subsystem = bld.env.MSVC_SUBSYSTEM
 	)

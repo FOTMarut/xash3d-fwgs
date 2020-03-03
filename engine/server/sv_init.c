@@ -17,9 +17,9 @@ GNU General Public License for more details.
 #include "server.h"
 #include "net_encode.h"
 #include "library.h"
-
+#if XASH_LOW_MEMORY != 2
 int SV_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
-
+#endif
 server_t		sv;	// local server
 server_static_t	svs;	// persistant server info
 svgame_static_t	svgame;	// persistant game info
@@ -131,12 +131,11 @@ SV_SoundIndex
 register unique sound for client
 ================
 */
-int SV_SoundIndex( const char *filename )
+int GAME_EXPORT SV_SoundIndex( const char *filename )
 {
 	char	name[MAX_QPATH];
 	int	i;
 
-	// don't precache sentence names!
 	if( !COM_CheckString( filename ))
 		return 0;
 
@@ -225,7 +224,7 @@ SV_GenericIndex
 register generic resourse for a server and client
 ================
 */
-int SV_GenericIndex( const char *filename )
+int GAME_EXPORT SV_GenericIndex( const char *filename )
 {
 	char	name[MAX_QPATH];
 	int	i;
@@ -264,7 +263,7 @@ int SV_GenericIndex( const char *filename )
 ================
 SV_ModelHandle
 
-register unique model for a server and client
+get model by handle
 ================
 */
 model_t *SV_ModelHandle( int modelindex )
@@ -277,12 +276,13 @@ model_t *SV_ModelHandle( int modelindex )
 void SV_ReadResourceList( const char *filename )
 {
 	string	token;
-	char	*afile, *pfile;
+	byte *afile;
+	char *pfile;
 
 	afile = FS_LoadFile( filename, NULL, false );
 	if( !afile ) return;
 
-	pfile = afile;
+	pfile = (char *)afile;
 
 	Con_DPrintf( "Precaching from %s\n", filename );
 	Con_DPrintf( "----------------------------------\n" );
@@ -300,6 +300,13 @@ void SV_ReadResourceList( const char *filename )
 	Mem_Free( afile );
 }
 
+/*
+================
+SV_CreateGenericResources
+
+loads external resource list
+================
+*/
 void SV_CreateGenericResources( void )
 {
 	string	filename;
@@ -312,6 +319,13 @@ void SV_CreateGenericResources( void )
 	SV_ReadResourceList( "reslist.txt" );
 }
 
+/*
+================
+SV_CreateResourceList
+
+add resources to common list
+================
+*/
 void SV_CreateResourceList( void )
 {
 	qboolean	ffirstsent = false;
@@ -582,7 +596,7 @@ void SV_ActivateServer( int runPhysics )
 		Mod_FreeUnused ();
 
 	host.movevars_changed = true;
-	sv.state = ss_active;
+	Host_SetServerState( ss_active );
 
 	Con_DPrintf( "level loaded at %.2f sec\n", Sys_DoubleTime() - svs.timestart );
 
@@ -620,7 +634,7 @@ void SV_DeactivateServer( void )
 
 	svgame.globals->time = sv.time;
 	svgame.dllFuncs.pfnServerDeactivate();
-	sv.state = ss_dead;
+	Host_SetServerState( ss_dead );
 
 	SV_FreeEdicts ();
 
@@ -652,14 +666,19 @@ A brand new game has been started
 */
 qboolean SV_InitGame( void )
 {
+	string dllpath;
+
 	if( svs.initialized )
 		return true; // already initialized ?
 
 	// first initialize?
 	COM_ResetLibraryError();
-	if( !SV_LoadProgs( SI.gamedll ))
+
+	COM_GetCommonLibraryPath( LIBRARY_SERVER, dllpath, sizeof( dllpath ));
+
+	if( !SV_LoadProgs( dllpath ))
 	{
-		Con_Printf( S_ERROR "can't initialize %s: %s\n", SI.gamedll, COM_GetLibraryError() );
+		Con_Printf( S_ERROR "can't initialize %s: %s\n", dllpath, COM_GetLibraryError() );
 		return false; // failed to loading server.dll
 	}
 
@@ -733,7 +752,9 @@ void SV_SetupClients( void )
 
 	// feedback for cvar
 	Cvar_FullSet( "maxplayers", va( "%d", svs.maxclients ), FCVAR_LATCH );
+#if XASH_LOW_MEMORY != 2
 	SV_UPDATE_BACKUP = ( svs.maxclients == 1 ) ? SINGLEPLAYER_BACKUP : MULTIPLAYER_BACKUP;
+#endif
 
 	svs.clients = Z_Realloc( svs.clients, sizeof( sv_client_t ) * svs.maxclients );
 	svs.num_client_entities = svs.maxclients * SV_UPDATE_BACKUP * NUM_PACKET_ENTITIES;
@@ -744,6 +765,83 @@ void SV_SetupClients( void )
 	NET_Config(( svs.maxclients > 1 ));
 	svgame.numEntities = svs.maxclients + 1; // clients + world
 	ClearBits( sv_maxclients->flags, FCVAR_CHANGED );
+}
+
+static qboolean CRC32_MapFile( dword *crcvalue, const char *filename, qboolean multiplayer )
+{
+	char	headbuf[1024], buffer[1024];
+	int	i, num_bytes, lumplen;
+	int	version, hdr_size;
+	dheader_t	*header;
+	file_t	*f;
+
+	if( !crcvalue ) return false;
+
+	// always calc same checksum for singleplayer
+	if( multiplayer == false )
+	{
+		*crcvalue = (('H'<<24)+('S'<<16)+('A'<<8)+'X');
+		return true;
+	}
+
+	f = FS_Open( filename, "rb", false );
+	if( !f ) return false;
+
+	// read version number
+	FS_Read( f, &version, sizeof( int ));
+	FS_Seek( f, 0, SEEK_SET );
+
+	hdr_size = sizeof( int ) + sizeof( dlump_t ) * HEADER_LUMPS;
+	num_bytes = FS_Read( f, headbuf, hdr_size );
+
+	// corrupted map ?
+	if( num_bytes != hdr_size )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	header = (dheader_t *)headbuf;
+
+	// invalid version ?
+	switch( header->version )
+	{
+	case Q1BSP_VERSION:
+	case HLBSP_VERSION:
+	case QBSP2_VERSION:
+		break;
+	default:
+		FS_Close( f );
+		return false;
+	}
+
+	CRC32_Init( crcvalue );
+
+	for( i = LUMP_PLANES; i < HEADER_LUMPS; i++ )
+	{
+		lumplen = header->lumps[i].filelen;
+		FS_Seek( f, header->lumps[i].fileofs, SEEK_SET );
+
+		while( lumplen > 0 )
+		{
+			if( lumplen >= sizeof( buffer ))
+				num_bytes = FS_Read( f, buffer, sizeof( buffer ));
+			else num_bytes = FS_Read( f, buffer, lumplen );
+
+			if( num_bytes > 0 )
+			{
+				lumplen -= num_bytes;
+				CRC32_ProcessBuffer( crcvalue, buffer, num_bytes );
+			}
+
+			// file unexpected end ?
+			if( FS_Eof( f )) break;
+		}
+	}
+
+	FS_Close( f );
+
+	return 1;
 }
 
 /*
@@ -833,7 +931,7 @@ qboolean SV_SpawnServer( const char *mapname, const char *startspot, qboolean ba
 	COM_FileBase( mapname, sv.name );
 
 	// precache and static commands can be issued during map initialization
-	sv.state = ss_loading;
+	Host_SetServerState( ss_loading );
 
 	if( startspot )
 		Q_strncpy( sv.startspot, startspot, sizeof( sv.startspot ));
@@ -901,10 +999,14 @@ int SV_GetMaxClients( void )
 
 void SV_InitGameProgs( void )
 {
+	string dllpath;
+
 	if( svgame.hInstance ) return; // already loaded
 
+	COM_GetCommonLibraryPath( LIBRARY_SERVER, dllpath, sizeof( dllpath ));
+
 	// just try to initialize
-	SV_LoadProgs( GI->game_dll );
+	SV_LoadProgs( dllpath );
 }
 
 void SV_FreeGameProgs( void )

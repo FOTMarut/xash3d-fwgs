@@ -45,7 +45,7 @@ XASH SPECIFIC			- sort of hack that works only in Xash3D not in GoldSrc
 #include <stdlib.h> // rand, adbs
 #include <stdarg.h> // va
 
-#ifndef _WIN32
+#if !XASH_WIN32
 #include <stddef.h> // size_t
 #else
 #include <sys/types.h> // off_t
@@ -60,7 +60,7 @@ XASH SPECIFIC			- sort of hack that works only in Xash3D not in GoldSrc
 	#error "Please select timer backend"
 #endif
 
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	#if XASH_VIDEO == VIDEO_NULL
 		#error "Please select video backend"
 	#endif
@@ -117,17 +117,19 @@ typedef enum
 #include "crtlib.h"
 #include "cvar.h"
 #include "con_nprint.h"
+#include "crclib.h"
 
-#define XASH_VERSION	"0.99"		// engine current version
+#define XASH_VERSION        "0.20" // engine current version
+#define XASH_COMPAT_VERSION "0.99" // version we are based on
 
 // PERFORMANCE INFO
-#define MIN_FPS         	20.0		// host minimum fps value for maxfps.
-#define MAX_FPS         	200.0		// upper limit for maxfps.
-#define HOST_FPS		100.0		// multiplayer games typical fps
+#define MIN_FPS         20.0f		// host minimum fps value for maxfps.
+#define MAX_FPS         200.0f		// upper limit for maxfps.
+#define HOST_FPS		100.0f		// multiplayer games typical fps
 
-#define MAX_FRAMETIME	0.25
-#define MIN_FRAMETIME	0.0001
-#define GAME_FPS		20.0
+#define MAX_FRAMETIME	0.25f
+#define MIN_FRAMETIME	0.0001f
+#define GAME_FPS		20.0f
 
 #define MAX_CMD_TOKENS	80		// cmd tokens
 #define MAX_ENTNUMBER	99999		// for server and client parsing
@@ -136,9 +138,17 @@ typedef enum
 
 #define CIN_MAIN		0
 #define CIN_LOGO		1
-
+#if XASH_LOW_MEMORY == 0
 #define MAX_DECALS		512	// touching TE_DECAL messages, etc
 #define MAX_STATIC_ENTITIES	3096	// static entities that moved on the client when level is spawn
+
+#elif XASH_LOW_MEMORY == 2
+#define MAX_DECALS		256	// touching TE_DECAL messages, etc
+#define MAX_STATIC_ENTITIES	32	// static entities that moved on the client when level is spawn
+#elif XASH_LOW_MEMORY == 1
+#define MAX_DECALS		512	// touching TE_DECAL messages, etc
+#define MAX_STATIC_ENTITIES	128	// static entities that moved on the client when level is spawn
+#endif
 
 // filesystem flags
 #define FS_STATIC_PATH  ( 1U << 0 )  // FS_ClearSearchPath will be ignore this path
@@ -233,7 +243,6 @@ typedef struct gameinfo_s
 
 	char		game_dll_linux[64];	// custom path for game.dll
 	char		game_dll_osx[64];	// custom path for game.dll
-	char		client_lib[64];	// custom name of client library
 
 	qboolean	added;
 } gameinfo_t;
@@ -295,14 +304,6 @@ typedef enum
 	key_menu,
 	key_message
 } keydest_t;
-
-// MD5 Hash
-typedef struct
-{
-	uint	buf[4];
-	uint	bits[2];
-	byte	in[64];
-} MD5Context_t;
 
 typedef enum
 {
@@ -427,7 +428,6 @@ typedef struct host_parm_s
 	qboolean		shutdown_issued;	// engine is shutting down
 	qboolean		force_draw_version;	// used when fraps is loaded
 	float			force_draw_version_time;
-	qboolean		write_to_clipboard;	// put image to clipboard instead of disk
 	qboolean		apply_game_config;	// when true apply only to game cvars and ignore all other commands
 	qboolean		apply_opengl_config;// when true apply only to opengl cvars and ignore all other commands
 	qboolean		config_executed;	// a bit who indicated was config.cfg already executed e.g. from valve.rc
@@ -442,8 +442,8 @@ typedef struct host_parm_s
 	qboolean		movevars_changed;
 	qboolean		renderinfo_changed;
 
-	char		rootdir[256];	// member root directory
-	char		rodir[256];		// readonly root
+	char		rootdir[MAX_OSPATH];	// member root directory
+	char		rodir[MAX_OSPATH];		// readonly root
 	char		gamefolder[MAX_QPATH];	// it's a default gamefolder	
 	byte		*imagepool;	// imagelib mempool
 	byte		*soundpool;	// soundlib mempool
@@ -492,7 +492,7 @@ int Cmd_AddGameUICommand( const char *cmd_name, xcommand_t function );
 int Cmd_AddRefCommand( const char *cmd_name, xcommand_t function, const char *description );
 void Cmd_RemoveCommand( const char *cmd_name );
 qboolean Cmd_Exists( const char *cmd_name );
-void Cmd_LookupCmds( char *buffer, void *ptr, setpair_t callback );
+void Cmd_LookupCmds( void *buffer, void *ptr, setpair_t callback );
 qboolean Cmd_GetMapList( const char *s, char *completedname, int length );
 qboolean Cmd_GetDemoList( const char *s, char *completedname, int length );
 qboolean Cmd_GetMovieList( const char *s, char *completedname, int length );
@@ -515,7 +515,6 @@ qboolean Mem_IsAllocatedExt( byte *poolptr, void *data );
 void Mem_PrintList( size_t minallocationsize );
 void Mem_PrintStats( void );
 
-#ifndef REF_DLL
 #define Mem_Malloc( pool, size ) _Mem_Alloc( pool, size, false, __FILE__, __LINE__ )
 #define Mem_Calloc( pool, size ) _Mem_Alloc( pool, size, true, __FILE__, __LINE__ )
 #define Mem_Realloc( pool, ptr, size ) _Mem_Realloc( pool, ptr, size, true, __FILE__, __LINE__ )
@@ -525,7 +524,6 @@ void Mem_PrintStats( void );
 #define Mem_EmptyPool( pool ) _Mem_EmptyPool( pool, __FILE__, __LINE__ )
 #define Mem_IsAllocated( mem ) Mem_IsAllocatedExt( NULL, mem )
 #define Mem_Check() _Mem_Check( __FILE__, __LINE__ )
-#endif
 
 //
 // filesystem.c
@@ -543,6 +541,8 @@ const char *FS_GetDiskPath( const char *name, qboolean gamedironly );
 byte *W_LoadLump( wfile_t *wad, const char *lumpname, size_t *lumpsizeptr, const char type );
 void W_Close( wfile_t *wad );
 byte *FS_LoadFile( const char *path, fs_offset_t *filesizeptr, qboolean gamedironly );
+qboolean CRC32_File( dword *crcvalue, const char *filename );
+qboolean MD5_HashFile( byte digest[16], const char *pszFileName, uint seed[4] );
 byte *FS_LoadDirectFile( const char *path, fs_offset_t *filesizeptr );
 qboolean FS_WriteFile( const char *filename, const void *data, fs_offset_t len );
 qboolean COM_ParseVector( char **pfile, float *v, size_t size );
@@ -665,6 +665,7 @@ uint Sound_GetApproxWavePlayLen( const char *filepath );
 // build.c
 //
 int Q_buildnum( void );
+int Q_buildnum_compat( void );
 const char *Q_buildos( void );
 const char *Q_buildarch( void );
 const char *Q_buildcommit( void );
@@ -717,6 +718,7 @@ int CL_Active( void );
 
 void SV_Init( void );
 void SV_Shutdown( const char *finalmsg );
+void SV_ShutdownFilter( void );
 void Host_ServerFrame( void );
 qboolean SV_Active( void );
 
@@ -789,27 +791,10 @@ void pfnResetTutorMessageDecayData( void );
 //
 // con_utils.c
 //
-qboolean Cmd_AutocompleteName( const char *source, char *buffer, size_t bufsize );
+qboolean Cmd_AutocompleteName( const char *source, int arg, char *buffer, size_t bufsize );
 void Con_CompleteCommand( field_t *field );
 void Cmd_AutoComplete( char *complete_string );
 void Cmd_AutoCompleteClear( void );
-
-//
-// crclib.c
-//
-void CRC32_Init( dword *pulCRC );
-byte CRC32_BlockSequence( byte *base, int length, int sequence );
-void CRC32_ProcessBuffer( dword *pulCRC, const void *pBuffer, int nBuffer );
-void CRC32_ProcessByte( dword *pulCRC, byte ch );
-dword CRC32_Final( dword pulCRC );
-qboolean CRC32_File( dword *crcvalue, const char *filename );
-qboolean CRC32_MapFile( dword *crcvalue, const char *filename, qboolean multiplayer );
-void MD5Init( MD5Context_t *ctx );
-void MD5Update( MD5Context_t *ctx, const byte *buf, uint len );
-void MD5Final( byte digest[16], MD5Context_t *ctx );
-qboolean MD5_HashFile( byte digest[16], const char *pszFileName, uint seed[4] );
-uint COM_HashKey( const char *string, uint hashSize );
-char *MD5_Print( byte hash[16] );
 
 //
 // custom.c
@@ -836,29 +821,20 @@ void HPAK_CheckIntegrity( const char *filename );
 void HPAK_CheckSize( const char *filename );
 void HPAK_FlushHostQueue( void );
 
-//
-// keys.c
-//
-int Key_IsDown( int keynum );
-const char *Key_IsBind( int keynum );
-void Key_Event( int key, int down );
-void Key_Init( void );
-void Key_WriteBindings( file_t *f );
-const char *Key_GetBinding( int keynum );
-void Key_SetBinding( int keynum, const char *binding );
-void Key_ClearStates( void );
-const char *Key_KeynumToString( int keynum );
-int Key_StringToKeynum( const char *str );
-int Key_GetKey( const char *binding );
-void Key_EnumCmds_f( void );
-void Key_SetKeyDest( int key_dest );
-void Key_EnableTextInput( qboolean enable, qboolean force );
-
 #include "avi/avi.h"
+
+//
+// input.c
+//
+
+#define INPUT_DEVICE_MOUSE (1<<0)
+#define INPUT_DEVICE_TOUCH (1<<1)
+#define INPUT_DEVICE_JOYSTICK (1<<2)
+#define INPUT_DEVICE_VR (1<<3)
 
 // shared calls
 struct physent_s;
-typedef struct sv_client_s sv_client_t;
+struct sv_client_s;
 typedef struct sizebuf_s sizebuf_t;
 qboolean CL_IsInGame( void );
 qboolean CL_IsInMenu( void );
@@ -885,10 +861,9 @@ void SV_StartSound( edict_t *ent, int chan, const char *sample, float vol, float
 void SV_StartMusic( const char *curtrack, const char *looptrack, int position );
 void SV_CreateDecal( sizebuf_t *msg, const float *origin, int decalIndex, int entityIndex, int modelIndex, int flags, float scale );
 void Log_Printf( const char *fmt, ... ) _format( 1 );
-struct sizebuf_s *SV_GetReliableDatagram( void );
 void SV_BroadcastCommand( const char *fmt, ... ) _format( 1 );
 qboolean SV_RestoreCustomDecal( struct decallist_s *entry, edict_t *pEdict, qboolean adjacent );
-void SV_BroadcastPrintf( sv_client_t *ignore, char *fmt, ... ) _format( 2 );
+void SV_BroadcastPrintf( struct sv_client_s *ignore, char *fmt, ... ) _format( 2 );
 int R_CreateDecalList( struct decallist_s *pList );
 void R_ClearAllDecals( void );
 void CL_ClearStaticEntities( void );
@@ -967,6 +942,7 @@ void GL_FreeImage( const char *name );
 void VID_InitDefaultResolution( void );
 void VID_Init( void );
 void UI_SetActiveMenu( qboolean fActive );
+void UI_ShowConnectionWarning( void );
 void Cmd_Null_f( void );
 
 // soundlib shared exports
@@ -988,14 +964,6 @@ byte TextureToGamma( byte b );
 void ID_Init( void );
 const char *ID_GetMD5( void );
 void GAME_EXPORT ID_SetCustomClientID( const char *id );
-
-//
-// sequence.c
-//
-typedef struct sequenceEntry_ sequenceEntry_s;
-typedef struct sentenceEntry_ sentenceEntry_s;
-sequenceEntry_s *Sequence_Get( const char *fileName, const char *entryName );
-sentenceEntry_s *Sequence_PickSentence( const char *groupName, int pickMethod, int *picked );
 
 //
 // masterlist.c

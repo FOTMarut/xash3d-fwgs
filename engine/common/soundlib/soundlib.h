@@ -25,7 +25,7 @@ typedef struct loadwavfmt_s
 {
 	const char *formatstring;
 	const char *ext;
-	qboolean (*loadfunc)( const char *name, const byte *buffer, size_t filesize );
+	qboolean (*loadfunc)( const char *name, const byte *buffer, fs_offset_t filesize );
 } loadwavfmt_t;
 
 typedef struct streamfmt_s
@@ -60,7 +60,7 @@ typedef struct sndlib_s
 	int		cmd_flags;
 } sndlib_t;
 
-typedef struct stream_s
+struct stream_s
 {
 	const streamfmt_t	*format;	// streamformat to operate
 
@@ -77,7 +77,7 @@ typedef struct stream_s
 	char		temp[OUTBUF_SIZE]; // mpeg decoder stuff
 	size_t		pos;	// actual track position (or actual buffer remains)
 	int		buffsize;	// cached buffer size
-} stream_t;
+};
 
 /*
 ========================================================================
@@ -103,7 +103,7 @@ typedef struct
 	short	nChannels;	// 1,2 for stereo data is (l,r) pairs 
 	int	nSamplesPerSec;
 	int	nAvgBytesPerSec;
-	short	nBlockAlign;      
+	short	nBlockAlign;
 	short	nBitsPerSample;
 } wavehdr_t;
 
@@ -117,8 +117,8 @@ extern sndlib_t sound;
 //
 // formats load
 //
-qboolean Sound_LoadWAV( const char *name, const byte *buffer, size_t filesize );
-qboolean Sound_LoadMPG( const char *name, const byte *buffer, size_t filesize );
+qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesize );
+qboolean Sound_LoadMPG( const char *name, const byte *buffer, fs_offset_t filesize );
 
 //
 // stream operate

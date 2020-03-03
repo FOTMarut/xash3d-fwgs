@@ -71,6 +71,7 @@ convar_t	*cl_lw;
 convar_t	*cl_charset;
 convar_t	*cl_trace_messages;
 convar_t	*hud_utf8;
+convar_t	*ui_renderworld;
 
 //
 // userinfo
@@ -88,7 +89,7 @@ clgame_static_t	clgame;
 void CL_InternetServers_f( void );
 
 //======================================================================
-int CL_Active( void )
+int GAME_EXPORT CL_Active( void )
 {
 	return ( cls.state == ca_active );
 }
@@ -271,13 +272,13 @@ static float CL_LerpPoint( void )
 
 	if( frac < 0.0f )
 	{
-		if( frac < -0.01 )
+		if( frac < -0.01f )
 			cl.time = cl.mtime[1];
 		frac = 0.0f;
 	}
 	else if( frac > 1.0f )
 	{
-		if( frac > 1.01 )
+		if( frac > 1.01f )
 			cl.time = cl.mtime[0];
 		frac = 1.0f;
 	}
@@ -642,7 +643,7 @@ void CL_CreateCmd( void )
 
 	if( !cls.demoplayback )
 	{
-		pcmd->senttime = host.realtime;      
+		pcmd->senttime = host.realtime;
 		memset( &pcmd->cmd, 0, sizeof( pcmd->cmd ));
 		pcmd->receivedtime = -1.0;
 		pcmd->heldback = false;
@@ -650,7 +651,9 @@ void CL_CreateCmd( void )
 	}
 
 	active = (( cls.signon == SIGNONS ) && !cl.paused && !cls.demoplayback );
+	Platform_PreCreateMove();
 	clgame.dllFuncs.CL_CreateMove( host.frametime, &pcmd->cmd, active );
+	IN_EngineAppendMove( host.frametime, &pcmd->cmd, active  );
 
 	CL_PopPMStates();
 
@@ -1021,6 +1024,24 @@ void CL_SendConnectPacket( void )
 
 	memset( protinfo, 0, sizeof( protinfo ));
 
+	if( adr.type == NA_LOOPBACK )
+	{
+		IN_LockInputDevices( false );
+	}
+	else
+	{
+		int input_devices;
+
+		input_devices = IN_CollectInputDevices();
+		IN_LockInputDevices( true );
+
+		Info_SetValueForKey( protinfo, "d", va( "%d", input_devices ), sizeof( protinfo ) );
+		Info_SetValueForKey( protinfo, "v", XASH_VERSION, sizeof( protinfo ) );
+		Info_SetValueForKey( protinfo, "b", va( "%d", Q_buildnum() ), sizeof( protinfo ) );
+		Info_SetValueForKey( protinfo, "o", Q_buildos(), sizeof( protinfo ) );
+		Info_SetValueForKey( protinfo, "a", Q_buildarch(), sizeof( protinfo ) );
+	}
+
 	if( cls.legacymode )
 	{
 		// set related userinfo keys
@@ -1032,13 +1053,7 @@ void CL_SendConnectPacket( void )
 		if( !*Info_ValueForKey( cls.userinfo,"cl_maxpayload") )
 			Info_SetValueForKey( cls.userinfo, "cl_maxpayload", "1000", sizeof( cls.userinfo ) );
 
-		/// TODO: add input devices list
-		//Info_SetValueForKey( protinfo, "d", va( "%d", input_devices ), sizeof( protinfo ) );
-		Info_SetValueForKey( protinfo, "v", XASH_VERSION, sizeof( protinfo ) );
-		Info_SetValueForKey( protinfo, "b", va( "%d", Q_buildnum() ), sizeof( protinfo ) );
-		Info_SetValueForKey( protinfo, "o", Q_buildos(), sizeof( protinfo ) );
-		Info_SetValueForKey( protinfo, "a", Q_buildarch(), sizeof( protinfo ) );
-		Info_SetValueForKey( protinfo, "i", ID_GetMD5(), sizeof( protinfo ) );
+		Info_SetValueForKey( protinfo, "i", key, sizeof( protinfo ) );
 
 		Netchan_OutOfBandPrint( NS_CLIENT, adr, "connect %i %i %i \"%s\" %d \"%s\"\n",
 			PROTOCOL_LEGACY_VERSION, Q_atoi( qport ), cls.challenge, cls.userinfo, NET_LEGACY_EXT_SPLIT, protinfo );
@@ -1051,7 +1066,7 @@ void CL_SendConnectPacket( void )
 		if( cl_dlmax->value > FRAGMENT_MAX_SIZE  || cl_dlmax->value < FRAGMENT_MIN_SIZE )
 			Cvar_SetValue( "cl_dlmax", FRAGMENT_DEFAULT_SIZE );
 
-		Info_RemoveKey( cls.userinfo,"cl_maxpacket" );
+		Info_RemoveKey( cls.userinfo, "cl_maxpacket" );
 		Info_RemoveKey( cls.userinfo, "cl_maxpayload" );
 
 		Info_SetValueForKey( protinfo, "uuid", key, sizeof( protinfo ));
@@ -1061,7 +1076,6 @@ void CL_SendConnectPacket( void )
 		Netchan_OutOfBandPrint( NS_CLIENT, adr, "connect %i %i \"%s\" \"%s\"\n", PROTOCOL_VERSION, cls.challenge, protinfo, cls.userinfo );
 		Con_Printf( "Trying to connect by modern protocol\n" );
 	}
-
 
 	cls.timestart = Sys_DoubleTime();
 }
@@ -1087,6 +1101,8 @@ void CL_CheckForResend( void )
 		cls.signon = 0;
 		cls.state = ca_connecting;
 		Q_strncpy( cls.servername, "localhost", sizeof( cls.servername ));
+		cls.serveradr.type = NA_LOOPBACK;
+
 		// we don't need a challenge on the localhost
 		CL_SendConnectPacket();
 		return;
@@ -1139,6 +1155,7 @@ void CL_CheckForResend( void )
 		return;
 	}
 
+	cls.serveradr = adr;
 	cls.max_fragment_size = Q_max( FRAGMENT_MAX_SIZE, cls.max_fragment_size >> Q_min( 1, cls.connect_retry ));
 	cls.connect_time = host.realtime; // for retransmit requests
 	cls.connect_retry++;
@@ -1487,7 +1504,10 @@ void CL_Disconnect( void )
 	// clear the network channel, too.
 	Netchan_Clear( &cls.netchan );
 
+	IN_LockInputDevices( false ); // unlock input devices
+
 	cls.state = ca_disconnected;
+	memset( &cls.serveradr, 0, sizeof( cls.serveradr ) );
 	cls.set_lastdemo = false;
 	cls.connect_retry = 0;
 	cls.signon = 0;
@@ -1847,6 +1867,19 @@ void CL_SetupOverviewParams( void )
 
 /*
 =================
+CL_IsFromConnectingServer
+
+Used for connectionless packets, when netchan may not be ready.
+=================
+*/
+static qboolean CL_IsFromConnectingServer( netadr_t from )
+{
+	return NET_IsLocalAddress( from ) ||
+		NET_CompareAdr( cls.serveradr, from );
+}
+
+/*
+=================
 CL_ConnectionlessPacket
 
 Responses to broadcasts, etc
@@ -1874,6 +1907,9 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 	// server connection
 	if( !Q_strcmp( c, "client_connect" ))
 	{
+		if( !CL_IsFromConnectingServer( from ))
+			return;
+
 		if( cls.state == ca_connected )
 		{
 			Con_DPrintf( S_ERROR "dup connect received. ignored\n");
@@ -1902,7 +1938,7 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 			return;
 		}
 
-#ifdef XASH_SDL
+#if XASH_SDL == 2
 		SDL_ShowWindow( host.hWnd );
 #endif
 		args = MSG_ReadString( msg );
@@ -1914,20 +1950,18 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 		// print command from somewhere
 		Con_Printf( "%s", MSG_ReadString( msg ));
 	}
-	else if( !Q_strcmp( c, "errormsg" ))
-	{
-		args = MSG_ReadString( msg );
-		if( !Q_strcmp( args, "Server uses protocol version 48.\n" ))
-		{
-			cls.legacyserver = from;
-		}
-	}
 	else if( !Q_strcmp( c, "testpacket" ))
 	{
 		byte	recv_buf[NET_MAX_FRAGMENT];
-		dword	crcValue = MSG_ReadLong( msg );
-		int	realsize = MSG_GetMaxBytes( msg ) - MSG_GetNumBytesRead( msg );
+		dword	crcValue;
+		int	realsize;
 		dword	crcValue2 = 0;
+
+		if( !CL_IsFromConnectingServer( from ))
+			return;
+
+		crcValue = MSG_ReadLong( msg );
+		realsize = MSG_GetMaxBytes( msg ) - MSG_GetNumBytesRead( msg );
 
 		if( cls.max_fragment_size != MSG_GetMaxBytes( msg ))
 		{
@@ -1986,6 +2020,9 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 	}
 	else if( !Q_strcmp( c, "challenge" ))
 	{
+		if( !CL_IsFromConnectingServer( from ))
+			return;
+
 		// challenge from the server we are connecting to
 		cls.challenge = Q_atoi( Cmd_Argv( 1 ));
 		CL_SendConnectPacket();
@@ -1993,11 +2030,17 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 	}
 	else if( !Q_strcmp( c, "echo" ))
 	{
+		if( !CL_IsFromConnectingServer( from ))
+			return;
+
 		// echo request from server
 		Netchan_OutOfBandPrint( NS_CLIENT, from, "%s", Cmd_Argv( 1 ));
 	}
 	else if( !Q_strcmp( c, "disconnect" ))
 	{
+		if( !CL_IsFromConnectingServer( from ))
+			return;
+
 		// a disconnect message from the server, which will happen if the server
 		// dropped the connection but it is still getting packets from us
 		CL_Disconnect_f();
@@ -2006,6 +2049,48 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 		{
 			Cbuf_AddText( va( "connect %s legacy\n", NET_AdrToString( from )));
 			memset( &cls.legacyserver, 0, sizeof( cls.legacyserver ));
+		}
+	}
+	else if( !Q_strcmp( c, "errormsg" ))
+	{
+		if( !CL_IsFromConnectingServer( from ))
+			return;
+
+		args = MSG_ReadString( msg );
+
+		if( !Q_strcmp( args, "Server uses protocol version 48.\n" ))
+		{
+			cls.legacyserver = from;
+		}
+		else
+		{
+			if( UI_IsVisible() )
+				UI_ShowMessageBox( va("^3Server message^7\n%s", args ) );
+			Msg( "%s", args );
+		}
+	}
+	else if( !Q_strcmp( c, "updatemsg" ))
+	{
+		// got an update message from master server
+		// show update dialog from menu
+		netadr_t adr;
+		qboolean preferStore = true;
+
+		if( !Q_strcmp( Cmd_Argv( 1 ), "nostore" ) )
+			preferStore = false;
+
+		// trust only hardcoded master server
+		if( NET_StringToAdr( MASTERSERVER_ADR, &adr ) )
+		{
+			if( NET_CompareAdr( from, adr ))
+			{
+				UI_ShowUpdateDialog( preferStore );
+			}
+		}
+		else
+		{
+			// in case we don't have master anymore
+			UI_ShowUpdateDialog( preferStore );
 		}
 	}
 	else if( !Q_strcmp( c, "f" ))
@@ -2075,14 +2160,14 @@ void CL_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 
 		if( cls.internetservers_pending )
 		{
-			Cbuf_AddText( "menu_resetping\n" ); // TODO: New Menu API
+			UI_ResetPing();
 			cls.internetservers_pending = false;
 		}
 	}
 	else if( clgame.dllFuncs.pfnConnectionlessPacket( &from, args, buf, &len ))
 	{
 		// user out of band message (must be handled in CL_ConnectionlessPacket)
-		if( len > 0 ) Netchan_OutOfBand( NS_SERVER, from, len, buf );
+		if( len > 0 ) Netchan_OutOfBand( NS_SERVER, from, len, (byte *)buf );
 	}
 	else Con_DPrintf( S_ERROR "bad connectionless packet from %s:\n%s\n", NET_AdrToString( from ), args );
 }
@@ -2224,6 +2309,7 @@ void CL_ReadPackets( void )
 			// check resource for downloading and precache
 			CL_EstimateNeededResources();
 			CL_BatchResourceRequest( false );
+			cls.dl.doneregistering = false;
 			cls.dl.custom = true;
 		}
 
@@ -2236,7 +2322,7 @@ void CL_ReadPackets( void )
 
 	// if in the debugger last frame, don't timeout
 	if( host.frametime > 5.0f ) cls.netchan.last_received = Sys_DoubleTime();
-          
+
 	// check timeout
 	if( cls.state >= ca_connected && cls.state != ca_cinematic && !cls.demoplayback )
 	{
@@ -2708,6 +2794,7 @@ void CL_InitLocal( void )
 {
 	cls.state = ca_disconnected;
 	cls.signon = 0;
+	memset( &cls.serveradr, 0, sizeof( cls.serveradr ) );
 
 	cl.resourcesneeded.pNext = cl.resourcesneeded.pPrev = &cl.resourcesneeded;
 	cl.resourcesonhand.pNext = cl.resourcesonhand.pPrev = &cl.resourcesonhand;
@@ -2770,6 +2857,7 @@ void CL_InitLocal( void )
 	Cvar_Get( "cl_background", "0", FCVAR_READ_ONLY, "indicate what background map is running" );
 	cl_showevents = Cvar_Get( "cl_showevents", "0", FCVAR_ARCHIVE, "show events playback" );
 	Cvar_Get( "lastdemo", "", FCVAR_ARCHIVE, "last played demo" );
+	ui_renderworld = Cvar_Get( "ui_renderworld", "0", FCVAR_ARCHIVE, "render world when UI is visible" );
 
 	// these two added to shut up CS 1.5 about 'unknown' commands
 	Cvar_Get( "lightgamma", "1", FCVAR_ARCHIVE, "ambient lighting level (legacy, unused)" );
@@ -2851,12 +2939,13 @@ void CL_AdjustClock( void )
 
 	if( fabs( cl.timedelta ) >= 0.001f )
 	{
-		double	msec, adjust, sign;
+		double msec, adjust;
+		float sign;
 
-		msec = ( cl.timedelta * 1000.0 );
-		sign = ( msec < 0 ) ? 1.0 : -1.0;
+		msec = ( cl.timedelta * 1000.0f );
+		sign = ( msec < 0 ) ? 1.0f : -1.0f;
 		msec = fabs( msec );
-		adjust = sign * ( cl_fixtimerate->value / 1000.0 );
+		adjust = sign * ( cl_fixtimerate->value / 1000.0f );
 
 		if( fabs( adjust ) < fabs( cl.timedelta ))
 		{
@@ -2966,6 +3055,8 @@ CL_Init
 */
 void CL_Init( void )
 {
+	string libpath;
+
 	if( host.type == HOST_DEDICATED )
 		return; // nothing running on the client
 
@@ -2980,8 +3071,10 @@ void CL_Init( void )
 	// IN_TouchInit();
 	Con_LoadHistory();
 
-	if( !CL_LoadProgs( va( "%s/%s", GI->dll_path, SI.clientlib)))
-		Host_Error( "can't initialize %s: %s\n", SI.clientlib, COM_GetLibraryError() );
+	COM_GetCommonLibraryPath( LIBRARY_CLIENT, libpath, sizeof( libpath ));
+
+	if( !CL_LoadProgs( libpath ) )
+		Host_Error( "can't initialize %s: %s\n", libpath, COM_GetLibraryError() );
 
 	cls.initialized = true;
 	cl.maxclients = 1; // allow to drawing player in menu
@@ -3007,6 +3100,7 @@ void CL_Shutdown( void )
 	{
 		Host_WriteOpenGLConfig ();
 		Host_WriteVideoConfig ();
+		Touch_WriteConfig();
 	}
 
 	// IN_TouchShutdown ();

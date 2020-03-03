@@ -20,6 +20,7 @@ GNU General Public License for more details.
 #include "edict.h"
 #include "eiface.h"
 #include "ref_api.h"
+#include "studio.h"
 
 #define LM_SAMPLE_SIZE		16
 #define LM_SAMPLE_EXTRASIZE		8
@@ -96,6 +97,10 @@ typedef struct world_static_s
 	hull_model_t	*hull_models;
 	int		num_hull_models;
 
+	// out pointers to light data
+	color24		*deluxedata;	// deluxemap data pointer
+	byte		*shadowdata;	// occlusion data pointer
+
 	// visibility info
 	size_t		visbytes;		// cluster size
 	size_t		fatbytes;		// fatpvs size
@@ -104,6 +109,10 @@ typedef struct world_static_s
 	vec3_t		mins;		// real accuracy world bounds
 	vec3_t		maxs;
 	vec3_t		size;
+
+	// tree visualization stuff
+	int		recursion_level;
+	int		max_recursion;
 } world_static_t;
 
 #ifndef REF_DLL
@@ -164,10 +173,6 @@ void Mod_ReleaseHullPolygons( void );
 //
 // mod_studio.c
 //
-typedef struct studiohdr_s studiohdr_t;
-typedef struct mstudioseqdesc_s mstudioseqdesc_t;
-typedef struct mstudiobone_s mstudiobone_t;
-typedef struct mstudioanim_s mstudioanim_t;
 void Mod_LoadStudioModel( model_t *mod, const void *buffer, qboolean *loaded );
 void Mod_UnloadStudioModel( model_t *mod );
 void Mod_InitStudioAPI( void );

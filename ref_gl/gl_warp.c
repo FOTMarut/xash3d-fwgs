@@ -75,7 +75,7 @@ static int CheckSkybox( const char *name )
 	{	
 		num_checked_sides = 0;
 		for( j = 0; j < 6; j++ )
-		{         
+		{
 			// build side name
 			sidename = va( "%s%s.%s", name, r_skyBoxSuffix[j], skybox_ext[i] );
 			if( gEngfuncs.FS_FileExists( sidename, false ))
@@ -87,7 +87,7 @@ static int CheckSkybox( const char *name )
 			return SKYBOX_HLSTYLE; // image exists
 
 		for( j = 0; j < 6; j++ )
-		{         
+		{
 			// build side name
 			sidename = va( "%s_%s.%s", name, r_skyBoxSuffix[j], skybox_ext[i] );
 			if( gEngfuncs.FS_FileExists( sidename, false ))
@@ -576,9 +576,9 @@ void R_CloudRenderSide( int axis )
 
 	p->numverts = 4;
 	di = SKYCLOUDS_QUALITY;
-	qi = 1.0 / di;
+	qi = 1.0f / di;
 	dj = (axis < 4) ? di * 2 : di; //subdivide vertically more than horizontally on skybox sides
-	qj = 1.0 / dj;
+	qj = 1.0f / dj;
 
 	for( i = 0; i < di; i++ )
 	{
@@ -729,7 +729,7 @@ void R_InitSkyClouds( mip_t *mt, texture_t *tx, qboolean custom_palette )
 				trans[(i * r_sky->height) + j] = transpix;
 			}
 			else
-			{         
+			{
 				rgba = (uint *)r_sky->palette + p;
 				trans[(i * r_sky->height) + j] = *rgba;
 			}
@@ -759,6 +759,11 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse )
 	float	s, t, os, ot;
 	glpoly_t	*p;
 	int	i;
+#ifndef XASH_GLES
+	const qboolean useQuads = FBitSet( warp->flags, SURF_DRAWTURB_QUADS );
+#else
+	const qboolean useQuads = false; // TODO: figure out why
+#endif
 
 	if( !warp->polys ) return;
 
@@ -770,7 +775,7 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse )
 	// reset fog color for nonlightmapped water
 	GL_ResetFogColor();
 
-	if( FBitSet( warp->flags, SURF_DRAWTURB_QUADS ))
+	if( useQuads )
 		pglBegin( GL_QUADS );
 
 	for( p = warp->polys; p; p = p->next )
@@ -779,7 +784,7 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse )
 			v = p->verts[0] + ( p->numverts - 1 ) * VERTEXSIZE;
 		else v = p->verts[0];
 
-		if( !FBitSet( warp->flags, SURF_DRAWTURB_QUADS ))
+		if( !useQuads )
 			pglBegin( GL_POLYGON );
 
 		for( i = 0; i < p->numverts; i++ )
@@ -809,11 +814,11 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse )
 			else v += VERTEXSIZE;
 		}
 
-		if( !FBitSet( warp->flags, SURF_DRAWTURB_QUADS ))
+		if( !useQuads )
 			pglEnd();
 	}
 
-	if( FBitSet( warp->flags, SURF_DRAWTURB_QUADS ))
+	if( useQuads )
 		pglEnd();
 
 	GL_SetupFogColorForSurfaces();

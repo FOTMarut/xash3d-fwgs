@@ -87,27 +87,6 @@ static void GAME_EXPORT CL_FillRGBABlend( float _x, float _y, float _w, float _h
 	pglDisable( GL_BLEND );
 }
 
-static void Mod_LoadModel( modtype_t desiredType, model_t *mod, const byte *buf, qboolean *loaded, int flags )
-{
-	switch( desiredType )
-	{
-	case mod_studio:
-		// Mod_LoadStudioModel( mod, buf, loaded );
-		break;
-	case mod_sprite:
-		Mod_LoadSpriteModel( mod, buf, loaded, flags );
-		break;
-	case mod_alias:
-		Mod_LoadAliasModel( mod, buf, loaded );
-		break;
-	case mod_brush:
-		// Mod_LoadBrushModel( mod, buf, loaded );
-		break;
-
-	default: gEngfuncs.Host_Error( "Mod_LoadModel: unsupported type %d\n", mod->type );
-	}
-}
-
 void Mod_BrushUnloadTextures( model_t *mod )
 {
 	int i;
@@ -116,11 +95,11 @@ void Mod_BrushUnloadTextures( model_t *mod )
 	{
 		texture_t *tx = mod->textures[i];
 		if( !tx || tx->gl_texturenum == tr.defaultTexture )
-			continue;       // free slot
+			continue; // free slot
 
 		GL_FreeTexture( tx->gl_texturenum );    // main texture
 		GL_FreeTexture( tx->fb_texturenum );    // luma texture
-        }
+	}
 }
 
 void Mod_UnloadTextures( model_t *mod )
@@ -141,7 +120,9 @@ void Mod_UnloadTextures( model_t *mod )
 	case mod_sprite:
 		Mod_SpriteUnloadTextures( mod->cache.data );
 		break;
-	default: gEngfuncs.Host_Error( "Mod_UnloadModel: unsupported type %d\n", mod->type );
+	default:
+		ASSERT( 0 );
+		break;
 	}
 }
 
@@ -151,8 +132,6 @@ qboolean Mod_ProcessRenderData( model_t *mod, qboolean create, const byte *buf )
 
 	if( create )
 	{
-
-
 		switch( mod->type )
 		{
 			case mod_studio:
@@ -167,7 +146,6 @@ qboolean Mod_ProcessRenderData( model_t *mod, qboolean create, const byte *buf )
 			case mod_brush:
 				// Mod_LoadBrushModel( mod, buf, loaded );
 				break;
-
 			default: gEngfuncs.Host_Error( "Mod_LoadModel: unsupported type %d\n", mod->type );
 		}
 	}
@@ -330,13 +308,53 @@ void R_ProcessEntData( qboolean allocate )
 		gEngfuncs.drawFuncs->R_ProcessEntData( allocate );
 }
 
+qboolean R_SetDisplayTransform( ref_screen_rotation_t rotate, int offset_x, int offset_y, float scale_x, float scale_y )
+{
+	qboolean ret = true;
+	if( rotate > 0 )
+	{
+		gEngfuncs.Con_Printf("rotation transform not supported\n");
+		ret = false;
+	}
+
+	if( offset_x || offset_y )
+	{
+		gEngfuncs.Con_Printf("offset transform not supported\n");
+		ret = false;
+	}
+
+	if( scale_x != 1.0f || scale_y != 1.0f )
+	{
+		gEngfuncs.Con_Printf("scale transform not supported\n");
+		ret = false;
+	}
+
+	return ret;
+}
+
+static void* GAME_EXPORT R_GetProcAddress( const char *name )
+{
+#ifdef XASH_GL4ES
+	extern void *gl4es_GetProcAddress( const char *name );
+	return gl4es_GetProcAddress( name );
+#else // TODO: other wrappers
+	return gEngfuncs.GL_GetProcAddress( name );
+#endif
+}
+
+static const char *R_GetConfigName( void )
+{
+	return "opengl";
+}
+
 ref_interface_t gReffuncs =
 {
 	R_Init,
 	R_Shutdown,
+	R_GetConfigName,
+	R_SetDisplayTransform,
 
 	GL_SetupAttributes,
-	GL_OnContextCreated,
 	GL_InitExtensions,
 	GL_ClearExtensions,
 
@@ -357,7 +375,6 @@ ref_interface_t gReffuncs =
 	R_ProcessEntData,
 
 	R_ShowTextures,
-	R_ShowTree,
 
 	R_GetTextureOriginalBuffer,
 	GL_LoadTextureFromBuffer,
@@ -446,6 +463,7 @@ ref_interface_t gReffuncs =
 	Mod_GetCurrentVis,
 	R_NewMap,
 	R_ClearScene,
+	R_GetProcAddress,
 
 	TriRenderMode,
 	TriBegin,
@@ -488,4 +506,17 @@ int EXPORT GetRefAPI( int version, ref_interface_t *funcs, ref_api_t *engfuncs, 
 	gpGlobals = globals;
 
 	return REF_API_VERSION;
+}
+
+void EXPORT GetRefHumanReadableName( char *out, size_t size )
+{
+#if defined XASH_NANOGL
+	Q_strncpy( out, "GLES1(NanoGL)", size );
+#elif defined XASH_WES
+	Q_strncpy( out, "GLES2(gl-wes-v2)", size );
+#elif defined XASH_GL4ES
+	Q_strncpy( out, "GLES2(gl4es)", size );
+#else
+	Q_strncpy( out, "OpenGL", size );
+#endif
 }

@@ -98,17 +98,59 @@ keyname_t keynames[] =
 {"KP_PLUS",	K_KP_PLUS,	""		},
 {"PAUSE",		K_PAUSE,		"pause"		},
 
+{"A_BUTTON", K_A_BUTTON, ""}, // they match xbox controller
+{"B_BUTTON", K_B_BUTTON, ""},
+{"X_BUTTON", K_X_BUTTON, ""},
+{"Y_BUTTON", K_Y_BUTTON, ""},
+{"L1_BUTTON",  K_L1_BUTTON, ""},
+{"R1_BUTTON",  K_R1_BUTTON, ""},
+{"BACK",   K_BACK_BUTTON, ""},
+{"MODE",   K_MODE_BUTTON, ""},
+{"START",  K_START_BUTTON, ""},
+{"STICK1", K_LSTICK, ""},
+{"STICK2", K_RSTICK, ""},
+{"L2_BUTTON", K_L2_BUTTON, ""}, // in case...
+{"R2_BUTTON", K_R2_BUTTON, ""},
+{"C_BUTTON", K_C_BUTTON, ""},
+{"Z_BUTTON", K_Z_BUTTON, ""},
+{"AUX16", K_AUX16, ""}, // generic
+{"AUX17", K_AUX17, ""},
+{"AUX18", K_AUX18, ""},
+{"AUX19", K_AUX19, ""},
+{"AUX20", K_AUX20, ""},
+{"AUX21", K_AUX21, ""},
+{"AUX22", K_AUX22, ""},
+{"AUX23", K_AUX23, ""},
+{"AUX24", K_AUX24, ""},
+{"AUX25", K_AUX25, ""},
+{"AUX26", K_AUX26, ""},
+{"AUX27", K_AUX27, ""},
+{"AUX28", K_AUX28, ""},
+{"AUX29", K_AUX29, ""},
+{"AUX30", K_AUX30, ""},
+{"AUX31", K_AUX31, ""},
+{"AUX32", K_AUX32, ""},
+{"LTRIGGER" , K_JOY1 , ""},
+{"RTRIGGER" , K_JOY2 , ""},
+{"JOY3" , K_JOY3 , ""},
+{"JOY4" , K_JOY4 , ""},
+
 // raw semicolon seperates commands
 {"SEMICOLON",	';',		""		},
 {NULL,		0,		NULL		},
 };
+
+static void OSK_EnableTextInput( qboolean enable, qboolean force );
+static qboolean OSK_KeyEvent( int key, int down );
+static convar_t *osk_enable;
+static convar_t *key_rotate;
 
 /*
 ===================
 Key_IsDown
 ===================
 */
-int Key_IsDown( int keynum )
+int GAME_EXPORT Key_IsDown( int keynum )
 {
 	if( keynum == -1 )
 		return false;
@@ -237,7 +279,7 @@ const char *Key_KeynumToString( int keynum )
 Key_SetBinding
 ===================
 */
-void Key_SetBinding( int keynum, const char *binding )
+void GAME_EXPORT Key_SetBinding( int keynum, const char *binding )
 {
 	if( keynum == -1 ) return;
 
@@ -335,6 +377,9 @@ void Key_Unbindall_f( void )
 		if( keys[i].binding )
 			Key_SetBinding( i, "" );
 	}
+
+	// set some defaults
+	Key_SetBinding( K_ESCAPE, "escape" );
 }
 
 /*
@@ -474,6 +519,10 @@ void Key_Init( void )
 
 	// setup default binding. "unbindall" from config.cfg will be reset it
 	for( kn = keynames; kn->name; kn++ ) Key_SetBinding( kn->keynum, kn->binding ); 
+
+	osk_enable = Cvar_Get( "osk_enable", "0", FCVAR_ARCHIVE, "enable built-in on-screen keyboard" );
+	key_rotate = Cvar_Get( "key_rotate", "0", FCVAR_ARCHIVE, "rotate arrow keys (0-3)" );
+
 }
 
 /*
@@ -546,6 +595,48 @@ static qboolean Key_IsAllowedAutoRepeat( int key )
 	} 
 }
 
+static int Key_Rotate( int key )
+{
+	if( key_rotate->value == 1.0f ) // CW
+	{
+		if( key == K_UPARROW )
+				key = K_LEFTARROW;
+		else if( key == K_LEFTARROW )
+				key = K_DOWNARROW;
+		else if( key == K_RIGHTARROW )
+				key = K_UPARROW;
+		else if( key == K_DOWNARROW )
+				key = K_RIGHTARROW;
+	}
+
+	else if( key_rotate->value == 3.0f ) // CCW
+	{
+		if( key == K_UPARROW )
+				key = K_RIGHTARROW;
+		else if( key == K_LEFTARROW )
+				key = K_UPARROW;
+		else if( key == K_RIGHTARROW )
+				key = K_DOWNARROW;
+		else if( key == K_DOWNARROW )
+				key = K_LEFTARROW;
+	}
+
+	else if( key_rotate->value == 2.0f )
+	{
+		if( key == K_UPARROW )
+				key = K_DOWNARROW;
+		else if( key == K_LEFTARROW )
+				key = K_RIGHTARROW;
+		else if( key == K_RIGHTARROW )
+				key = K_LEFTARROW;
+		else if( key == K_DOWNARROW )
+				key = K_UPARROW;
+	}
+
+	return key;
+}
+
+
 /*
 ===================
 Key_Event
@@ -553,9 +644,14 @@ Key_Event
 Called by the system for both key up and key down events
 ===================
 */
-void Key_Event( int key, int down )
+void GAME_EXPORT Key_Event( int key, int down )
 {
 	const char	*kb;
+
+	key = Key_Rotate( key );
+
+	if( OSK_KeyEvent( key, down ) )
+		return;
 
 	// key was pressed before engine was run
 	if( !keys[key].down && !down )
@@ -612,6 +708,7 @@ void Key_Event( int key, int down )
 	}
 
 	VGui_KeyEvent( key, down );
+	Touch_KeyEvent( key, down );
 
 	// console key is hardcoded, so the user can never unbind it
 	if( key == '`' || key == '~' )
@@ -708,13 +805,17 @@ Key_EnableTextInput
 */
 void Key_EnableTextInput( qboolean enable, qboolean force )
 {
+	if( CVAR_TO_BOOL( osk_enable ) )
+	{
+		OSK_EnableTextInput( enable, force );
+		return;
+	}
 	if( enable && ( !host.textmode || force ) )
 		Platform_EnableTextInput( true );
 	else if( !enable )
 		Platform_EnableTextInput( false );
 
-	if( !force )
-		host.textmode = enable;
+	host.textmode = enable;
 }
 
 /*
@@ -722,7 +823,7 @@ void Key_EnableTextInput( qboolean enable, qboolean force )
 Key_SetKeyDest
 =========
 */
-void Key_SetKeyDest( int key_dest )
+void GAME_EXPORT Key_SetKeyDest( int key_dest )
 {
 	IN_ToggleClientMouse( key_dest, cls.key_dest );
 
@@ -755,7 +856,7 @@ void Key_SetKeyDest( int key_dest )
 Key_ClearStates
 ===================
 */
-void Key_ClearStates( void )
+void GAME_EXPORT Key_ClearStates( void )
 {
 	int	i;
 
@@ -803,4 +904,308 @@ void CL_CharEvent( int key )
 	{
 		UI_CharEvent( key );
 	}
+}
+
+/*
+============
+Key_ToUpper
+
+A helper function if platform input doesn't support text mode properly
+============
+*/
+int Key_ToUpper( int keynum )
+{
+	keynum = Q_toupper( keynum );
+	if( keynum == '-' )
+		keynum = '_';
+	if( keynum == '=' )
+		keynum = '+';
+	if( keynum == ';' )
+		keynum = ':';
+	if( keynum == '\'' )
+		keynum = '"';
+
+	return keynum;
+}
+
+/* On-screen keyboard:
+ *
+ * 4 lines with 13 buttons each
+ * Left trigger == backspace
+ * Right trigger == space
+ * Any button press is button press on keyboard
+ *
+ * Our layout:
+ *  0  1  2  3  4  5  6  7  8  9  10 11 12
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |` |1 |2 |3 |4 |5 |6 |7 |8 |9 |0 |- |= | 0
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |q |w |e |r |t |y |u |i |o |p |[ |] |\ | 1
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |CL|a |s |d |f |g |h |j |k |l |; |' |BS| 2
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |SH|z |x |c |v |b |n |m |, |. |/ |SP|EN| 3
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ */
+
+#define MAX_OSK_ROWS 13
+#define MAX_OSK_LINES 4
+
+enum
+{
+	OSK_DEFAULT = 0,
+	OSK_UPPER, // on caps, shift
+	/*
+	OSK_RUSSIAN,
+	OSK_RUSSIAN_UPPER,
+	*/
+	OSK_LAST
+};
+
+enum
+{
+	OSK_TAB = 16,
+	OSK_SHIFT,
+	OSK_BACKSPACE,
+	OSK_ENTER,
+	OSK_SPECKEY_LAST
+};
+static const char *osk_keylayout[][4] =
+{
+	{
+			  "`1234567890-=",  // 13
+			  "qwertyuiop[]\\", // 13
+		"\x10" "asdfghjkl;'" "\x12",   // 11 + caps on a left, enter on a right
+		"\x11" "zxcvbnm,./ " "\x13"     // 10 + esc on left + shift on a left/right
+	},
+	{
+			  "~!@#$%^&*()_+",
+			  "QWERTYUIOP{}|",
+		"\x10" "ASDFGHJKL:\"" "\x12",
+		"\x11" "ZXCVBNM<>? "  "\x13"
+	}
+};
+
+struct osk_s
+{
+	qboolean enable;
+	int curlayout;
+	qboolean shift;
+	qboolean sending;
+	struct {
+		signed char x;
+		signed char y;
+		char val;
+	} curbutton;
+} osk;
+
+static qboolean OSK_KeyEvent( int key, int down )
+{
+	if( !osk.enable || !CVAR_TO_BOOL( osk_enable ) )
+		return false;
+
+	if( osk.sending )
+	{
+		osk.sending = false;
+		return false;
+	}
+
+	if( osk.curbutton.val == 0 )
+	{
+		if( key == K_ENTER )
+		{
+			osk.curbutton.val = osk_keylayout[osk.curlayout][osk.curbutton.y][osk.curbutton.x];
+			return true;
+		}
+		return false;
+	}
+
+
+	switch ( key )
+	{
+	case K_ENTER:
+		switch( osk.curbutton.val )
+		{
+		case OSK_ENTER:
+			osk.sending  = true;
+			Key_Event( K_ENTER, down );
+			//osk_enable = false; // TODO: handle multiline
+			break;
+		case OSK_SHIFT:
+			if( !down )
+				break;
+
+			if( osk.curlayout & 1 )
+				osk.curlayout--;
+			else
+				osk.curlayout++;
+
+			osk.shift = osk.curbutton.val == OSK_SHIFT;
+			osk.curbutton.val = osk_keylayout[osk.curlayout][osk.curbutton.y][osk.curbutton.x];
+			break;
+		case OSK_BACKSPACE:
+			Key_Event( K_BACKSPACE, down ); break;
+		case OSK_TAB:
+			Key_Event( K_TAB, down ); break;
+		default:
+			{
+				int ch;
+
+				if( !down )
+				{
+					if( osk.shift && osk.curlayout & 1 )
+						osk.curlayout--;
+
+					osk.shift = false;
+					osk.curbutton.val = osk_keylayout[osk.curlayout][osk.curbutton.y][osk.curbutton.x];
+					break;
+				}
+
+				if( !Q_stricmp( cl_charset->string, "utf-8" ) )
+					ch = (unsigned char)osk.curbutton.val;
+				else
+					ch = Con_UtfProcessCharForce( (unsigned char)osk.curbutton.val );
+
+				if( !ch )
+					break;
+
+				Con_CharEvent( ch );
+				if( cls.key_dest == key_menu )
+					UI_CharEvent ( ch );
+
+				break;
+			}
+		}
+		break;
+	case K_UPARROW:
+		if( down && --osk.curbutton.y < 0 )
+		{
+			osk.curbutton.y = MAX_OSK_LINES - 1;
+			osk.curbutton.val = 0;
+			return true;
+		}
+		break;
+	case K_DOWNARROW:
+		if( down && ++osk.curbutton.y >= MAX_OSK_LINES )
+		{
+			osk.curbutton.y = 0;
+			osk.curbutton.val = 0;
+			return true;
+		}
+		break;
+	case K_LEFTARROW:
+		if( down && --osk.curbutton.x < 0 )
+			osk.curbutton.x = MAX_OSK_ROWS - 1;
+		break;
+	case K_RIGHTARROW:
+		if( down && ++osk.curbutton.x >= MAX_OSK_ROWS )
+			osk.curbutton.x = 0;
+		break;
+	default:
+		return false;
+	}
+
+	osk.curbutton.val = osk_keylayout[osk.curlayout][osk.curbutton.y][osk.curbutton.x];
+	return true;
+
+}
+
+/*
+=============
+Joy_EnableTextInput
+
+Enables built-in IME
+=============
+*/
+static void OSK_EnableTextInput( qboolean enable, qboolean force )
+{
+	qboolean old = osk.enable;
+
+	osk.enable = enable;
+
+	if( osk.enable && (!old || force) )
+	{
+		osk.curlayout = 0;
+		osk.curbutton.val = osk_keylayout[osk.curlayout][osk.curbutton.y][osk.curbutton.x];
+
+	}
+}
+
+#define X_START 0.1347475f
+#define Y_START 0.567f
+#define X_STEP 0.05625
+#define Y_STEP 0.0825
+
+/*
+============
+Joy_DrawSymbolButton
+
+Draw button with symbol on it
+============
+*/
+static void OSK_DrawSymbolButton( int symb, float x, float y, float width, float height )
+{
+	char str[] = {symb & 255, 0};
+	byte color[] = { 255, 255, 255, 255 };
+	int x1 = x * refState.width,
+		y1 = y * refState.height,
+		w = width * refState.width,
+		h = height * refState.height;
+
+	if( symb == osk.curbutton.val )
+	{
+		ref.dllFuncs.FillRGBABlend( x1, y1, w, h, 255, 160, 0, 100 );
+	}
+
+	if( !symb || symb == ' ' || (symb >= OSK_TAB && symb < OSK_SPECKEY_LAST ) )
+		return;
+
+	Con_DrawCharacter( x1 + 1, y1, symb, color );
+}
+
+/*
+=============
+Joy_DrawSpecialButton
+
+Draw special button, like shift, enter or esc
+=============
+*/
+static void OSK_DrawSpecialButton( const char *name, float x, float y, float width, float height )
+{
+	byte color[] = { 0, 255, 0, 255 };
+
+	Con_DrawString( x * refState.width, y * refState.height, name, color );
+}
+
+
+/*
+=============
+Joy_DrawOnScreenKeyboard
+
+Draw on screen keyboard, if enabled
+=============
+*/
+void OSK_Draw( void )
+{
+	const char **curlayout = osk_keylayout[osk.curlayout]; // shortcut :)
+	float  x, y;
+	int i, j;
+
+	if( !osk.enable || !CVAR_TO_BOOL(osk_enable) || !osk.curbutton.val )
+		return;
+
+	// draw keyboard
+	ref.dllFuncs.FillRGBABlend( X_START * refState.width, Y_START * refState.height,
+					  X_STEP * MAX_OSK_ROWS * refState.width,
+					  Y_STEP * MAX_OSK_LINES * refState.height, 100, 100, 100, 100 );
+
+	OSK_DrawSpecialButton( "-]",   X_START,               Y_START + Y_STEP * 2, X_STEP, Y_STEP );
+	OSK_DrawSpecialButton( "<-",  X_START + X_STEP * 12, Y_START + Y_STEP * 2, X_STEP, Y_STEP );
+
+	OSK_DrawSpecialButton( "sh", X_START,               Y_START + Y_STEP * 3, X_STEP, Y_STEP );
+	OSK_DrawSpecialButton( "en", X_START + X_STEP * 12, Y_START + Y_STEP * 3, X_STEP, Y_STEP );
+
+	for( y = Y_START,     j = 0; j < MAX_OSK_LINES; j++, y += Y_STEP )
+		for( x = X_START, i = 0; i < MAX_OSK_ROWS;  i++, x += X_STEP )
+			OSK_DrawSymbolButton( curlayout[j][i], x, y, X_STEP, Y_STEP );
 }

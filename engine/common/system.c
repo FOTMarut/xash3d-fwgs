@@ -22,12 +22,12 @@ GNU General Public License for more details.
 #include <SDL.h>
 #endif
 
-#ifndef _WIN32
+#if XASH_POSIX
 #include <unistd.h>
 #include <signal.h>
 #include <dlfcn.h>
 
-#ifndef __ANDROID__
+#if !XASH_ANDROID
 #include <pwd.h>
 #endif
 #endif
@@ -46,15 +46,14 @@ double GAME_EXPORT Sys_DoubleTime( void )
 {
 	return Platform_DoubleTime();
 }
-
-#if defined __linux__ || ( defined _WIN32 && !defined XASH_64BIT )
+#if XASH_LINUX || ( XASH_WIN32 && !XASH_64BIT )
 	#undef DEBUG_BREAK
-	qboolean Sys_DebuggerPresent(); // see sys_linux.c
-	#ifdef _MSC_VER
+	qboolean Sys_DebuggerPresent( void ); // see sys_linux.c
+	#if XASH_MSVC
 		#define DEBUG_BREAK \
 			if( Sys_DebuggerPresent() ) \
 				_asm{ int 3 }
-	#elif __i386__
+	#elif XASH_X86
 		#define DEBUG_BREAK \
 			if( Sys_DebuggerPresent() ) \
 				asm volatile("int $3;")
@@ -64,8 +63,7 @@ double GAME_EXPORT Sys_DoubleTime( void )
 				raise( SIGINT )
 	#endif
 #endif
-
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 /*
 ================
 Sys_GetClipboardData
@@ -91,9 +89,9 @@ Sys_SetClipboardData
 write screenshot into clipboard
 ================
 */
-void Sys_SetClipboardData( const byte *buffer, size_t size )
+void Sys_SetClipboardData( const char *buffer, size_t size )
 {
-	Platform_SetClipboardText( (char *)buffer, size );
+	Platform_SetClipboardText( buffer, size );
 }
 #endif // XASH_DEDICATED
 
@@ -122,13 +120,13 @@ returns username for current profile
 */
 char *Sys_GetCurrentUser( void )
 {
-#if defined(_WIN32)
+#if XASH_WIN32
 	static string	s_userName;
 	unsigned long size = sizeof( s_userName );
 
 	if( GetUserName( s_userName, &size ))
 		return s_userName;
-#elif !defined(__ANDROID__)
+#elif XASH_POSIX && !XASH_ANDROID
 	uid_t uid = geteuid();
 	struct passwd *pw = getpwuid( uid );
 
@@ -136,92 +134,6 @@ char *Sys_GetCurrentUser( void )
 		return pw->pw_name;
 #endif
 	return "Player";
-}
-
-#if (defined(__linux__) && !defined(__ANDROID__)) || defined (__FreeBSD__) || defined (__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
-static qboolean Sys_FindExecutable( const char *baseName, char *buf, size_t size )
-{
-	char *envPath;
-	char *part;
-	size_t length;
-	size_t baseNameLength;
-	size_t needTrailingSlash;
-
-	if( !baseName || !baseName[0] )
-		return false;
-
-	envPath = getenv( "PATH" );
-	if( !envPath )
-		return false;
-
-	baseNameLength = Q_strlen( baseName );
-	while( *envPath )
-	{
-		part = Q_strchr( envPath, ':' );
-		if( part )
-			length = part - envPath;
-		else
-			length = Q_strlen( envPath );
-
-		if( length > 0 )
-		{
-			needTrailingSlash = ( envPath[length - 1] == '/' ) ? 0 : 1;
-			if( length + baseNameLength + needTrailingSlash < size )
-			{
-				Q_strncpy( buf, envPath, length + 1 );
-				if( needTrailingSlash )
-					Q_strcpy( buf + length, "/" );
-				Q_strcpy( buf + length + needTrailingSlash, baseName );
-				buf[length + needTrailingSlash + baseNameLength] = '\0';
-				if( access( buf, X_OK ) == 0 )
-					return true;
-			}
-		}
-
-		envPath += length;
-		if( *envPath == ':' )
-			envPath++;
-	}
-	return false;
-}
-#endif
-
-/*
-=================
-Sys_ShellExecute
-=================
-*/
-void Sys_ShellExecute( const char *path, const char *parms, int shouldExit )
-{
-#ifdef _WIN32
-	if( !Q_strcmp( path, GENERIC_UPDATE_PAGE ) || !Q_strcmp( path, PLATFORM_UPDATE_PAGE ))
-		path = DEFAULT_UPDATE_PAGE;
-
-	ShellExecute( NULL, "open", path, parms, NULL, SW_SHOW );
-#elif (defined(__linux__) && !defined (__ANDROID__)) || defined (__FreeBSD__) || defined (__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
-
-	if( !Q_strcmp( path, GENERIC_UPDATE_PAGE ) || !Q_strcmp( path, PLATFORM_UPDATE_PAGE ))
-		path = DEFAULT_UPDATE_PAGE;
-
-	char xdgOpen[128];
-	if( Sys_FindExecutable( OPEN_COMMAND, xdgOpen, sizeof( xdgOpen ) ) )
-	{
-		const char *argv[] = {xdgOpen, path, NULL};
-		pid_t id = fork( );
-		if( id == 0 )
-		{
-			execv( xdgOpen, (char **)argv );
-			fprintf( stderr, "error opening %s %s", xdgOpen, path );
-			_exit( 1 );
-		}
-	}
-	else Con_Reportf( S_WARN "Could not find "OPEN_COMMAND" utility\n" );
-#elif defined(__ANDROID__) && !defined(XASH_DEDICATED)
-	Android_ShellExecute( path, parms );
-#endif
-
-	if( shouldExit )
-		Sys_Quit();
 }
 
 /*
@@ -334,7 +246,7 @@ qboolean Sys_GetIntFromCmdLine( const char* argName, int *out )
 
 void Sys_SendKeyEvents( void )
 {
-#ifdef _WIN32
+#if XASH_WIN32
 	MSG	msg;
 
 	while( PeekMessage( &msg, NULL, 0, 0, PM_NOREMOVE ))
@@ -342,8 +254,8 @@ void Sys_SendKeyEvents( void )
 		if( !GetMessage( &msg, NULL, 0, 0 ))
 			Sys_Quit ();
 
-      		TranslateMessage( &msg );
-      		DispatchMessage( &msg );
+		TranslateMessage( &msg );
+		DispatchMessage( &msg );
 	}
 #endif
 }
@@ -390,7 +302,7 @@ qboolean Sys_LoadLibrary( dll_info_t *dll )
 			goto error;
 		}
 	}
-          Con_Reportf( " - ok\n" );
+	Con_Reportf( " - ok\n" );
 
 	return true;
 error:
@@ -439,7 +351,7 @@ wait for 'Esc' key will be hit
 */
 void Sys_WaitForQuit( void )
 {
-#ifdef _WIN32
+#if XASH_WIN32
 	MSG	msg;
 
 	Wcon_RegisterHotkeys();		
@@ -512,14 +424,14 @@ void Sys_Error( const char *error, ... )
 
 	if( !Host_IsDedicated() )
 	{
-#ifdef XASH_SDL
+#if XASH_SDL == 2
 		if( host.hWnd ) SDL_HideWindow( host.hWnd );
 #endif
 	}
 
 	if( host_developer.value )
 	{
-#ifdef _WIN32
+#if XASH_WIN32
 		Wcon_ShowConsole( true );
 		Wcon_DisableInput();	// disable input line for dedicated server
 #endif
@@ -528,7 +440,7 @@ void Sys_Error( const char *error, ... )
 	}
 	else
 	{
-#ifdef _WIN32
+#if XASH_WIN32
 		Wcon_ShowConsole( false );
 #endif
 		MSGBOX( text );
@@ -537,7 +449,7 @@ void Sys_Error( const char *error, ... )
 	Sys_Quit();
 }
 
-#ifdef __EMSCRIPTEN__
+#if XASH_EMSCRIPTEN
 /* strange glitchy bug on emscripten
 _exit->_Exit->asm._exit->_exit
 As we do not need atexit(), just throw hidden exception
@@ -572,14 +484,14 @@ print into window console
 */
 void Sys_Print( const char *pMsg )
 {
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	if( !Host_IsDedicated() )
 	{
 		Con_Print( pMsg );
 	}
 #endif
 
-#ifdef _WIN32
+#if XASH_WIN32
 	{
 		const char	*msg;
 		static char	buffer[MAX_PRINT_MSG];
@@ -625,10 +537,10 @@ void Sys_Print( const char *pMsg )
 			}
 			else
 			{
-				if( msg[i] == '\1' || msg[i] == '\2' )
+				if( msg[i] == '\1' || msg[i] == '\2' || msg[i] == '\3' )
 					i++;
-					*b = *c = msg[i];
-					b++, c++;
+				*b = *c = msg[i];
+				b++, c++;
 			}
 			i++;
 		}

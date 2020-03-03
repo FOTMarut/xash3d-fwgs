@@ -172,7 +172,7 @@ typedef struct cl_enginefuncs_s
 	int	(*GetMaxClients)( void );
 	void	(*Cvar_SetValue)( const char *cvar, float value );
 
-	int       (*Cmd_Argc)( void );	
+	int   (*Cmd_Argc)( void );
 	const char	*(*Cmd_Argv)( int arg );
 	void	(*Con_Printf)( const char *fmt, ... );
 	void	(*Con_DPrintf)( const char *fmt, ... );
@@ -213,14 +213,14 @@ typedef struct cl_enginefuncs_s
 	int	(*pfnRandomLong)( int lLow, int lHigh );
 	void	(*pfnHookEvent)( const char *name, void ( *pfnEvent )( struct event_args_s *args ));
 
-	int	(*Con_IsVisible) ();
+	int	(*Con_IsVisible) ( void );
 	const char *(*pfnGetGameDirectory)( void );
 	struct cvar_s *(*pfnGetCvarPointer)( const char *szName );
 	const char *(*Key_LookupBinding)( const char *pBinding );
 	const char *(*pfnGetLevelName)( void );
 	void	(*pfnGetScreenFade)( struct screenfade_s *fade );
 	void	(*pfnSetScreenFade)( struct screenfade_s *fade );
-	void*	(*VGui_GetPanel)( );
+	void*	(*VGui_GetPanel)( void );
 	void	(*VGui_ViewportPaintBackground)( int extents[4] );
 
 	byte*	(*COM_LoadFile)( const char *path, int usehunk, int *pLength );
@@ -303,6 +303,9 @@ typedef struct cl_enginefuncs_s
 	int		(*pfnGetAppID)( void );
 	cmdalias_t	*(*pfnGetAliases)( void );
 	void		(*pfnVguiWrap2_GetMouseDelta)( int *x, int *y );
+
+	// added in 2019 update, not documented yet
+	int		(*pfnFilteredClientCmd)( const char *cmd );
 } cl_enginefunc_t;
 
 #define CLDLL_INTERFACE_VERSION	7

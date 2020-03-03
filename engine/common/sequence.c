@@ -89,8 +89,8 @@ void Sequence_ResetDefaults( sequenceCommandLine_s *destination, sequenceCommand
 		static client_textmessage_t defaultClientMessage =
 		{
 			0, // effect
-			-1, -1, -1, -1, // rgba1
-			-1, -1, -1, -1, // rgba2
+			255, 255, 255, 255, // rgba1
+			255, 255, 255, 255, // rgba2
 			0.5, 0.5, // xy
 			0.2, 0.2, // fade-in/out
 			1.6, // holdtime
@@ -623,7 +623,7 @@ void Sequence_ReadCommandData( sequenceCommandEnum_e commandEnum, sequenceComman
 {
 	char temp[1024];
 
-	if( commandEnum >= SEQUENCE_MODIFIER_EFFECT || commandEnum <= SEQUENCE_MODIFIER_TEXTCHANNEL )
+	if( commandEnum >= SEQUENCE_MODIFIER_EFFECT && commandEnum <= SEQUENCE_MODIFIER_TEXTCHANNEL )
 		defaults->modifierBitField |= BIT( SEQUENCE_MODIFIER_EFFECT - SEQUENCE_COMMAND_NOOP );
 
 	switch( commandEnum )
@@ -1505,7 +1505,7 @@ Sequence_ParseBuffer
 
 ==============
 */
-void Sequence_ParseBuffer( byte *buffer, int bufferSize )
+static void Sequence_ParseBuffer( char *buffer, int bufferSize )
 {
 	char symbol;
 
@@ -1566,7 +1566,7 @@ void Sequence_ParseFile( const char *fileName, qboolean isGlobal )
 
 	Con_Reportf( "reading sequence file: %s\n", fileName );
 
-	Sequence_ParseBuffer( buffer, bufSize );
+	Sequence_ParseBuffer( (char *)buffer, bufSize );
 
 	Mem_Free( buffer );
 }

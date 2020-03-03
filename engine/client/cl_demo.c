@@ -51,6 +51,7 @@ const char *demo_cmd[dem_lastcmd+1] =
 	"dem_stop",
 };
 
+#pragma pack( push, 1 )
 typedef struct
 {
 	int		id;		// should be IDEM
@@ -62,6 +63,7 @@ typedef struct
 	char		gamedir[64];	// name of game directory (FS_Gamedir())
 	int		directory_offset;	// offset of Entry Directory.
 } demoheader_t;
+#pragma pack( pop )
 
 typedef struct
 {
@@ -1152,6 +1154,7 @@ void CL_StopPlayback( void )
 		// let game known about demo state	
 		Cvar_FullSet( "cl_background", "0", FCVAR_READ_ONLY );
 		cls.state = ca_disconnected;
+		memset( &cls.serveradr, 0, sizeof( cls.serveradr ) );
 		cls.set_lastdemo = false;
 		S_StopBackgroundTrack();
 		cls.connect_time = 0;
@@ -1168,7 +1171,7 @@ void CL_StopPlayback( void )
 CL_GetDemoComment
 ================== 
 */  
-int CL_GetDemoComment( const char *demoname, char *comment )
+int GAME_EXPORT CL_GetDemoComment( const char *demoname, char *comment )
 {
 	file_t		*demfile;
 	demoheader_t	demohdr;
@@ -1184,7 +1187,7 @@ int CL_GetDemoComment( const char *demoname, char *comment )
 	{
 		Q_strncpy( comment, "", MAX_STRING );
 		return false;
-          }
+	}
 
 	// read in the m_DemoHeader
 	FS_Read( demfile, &demohdr, sizeof( demoheader_t ));
@@ -1301,8 +1304,6 @@ CL_DemoGetName
 */  
 static void CL_DemoGetName( int lastnum, char *filename )
 {
-	int	a, b, c, d;
-
 	if( lastnum < 0 || lastnum > 9999 )
 	{
 		// bound
@@ -1310,15 +1311,7 @@ static void CL_DemoGetName( int lastnum, char *filename )
 		return;
 	}
 
-	a = lastnum / 1000;
-	lastnum -= a * 1000;
-	b = lastnum / 100;
-	lastnum -= b * 100;
-	c = lastnum / 10;
-	lastnum -= c * 10;
-	d = lastnum;
-
-	Q_sprintf( filename, "demo%i%i%i%i", a, b, c, d );
+	Q_sprintf( filename, "demo%04d", lastnum );
 }
 
 /*

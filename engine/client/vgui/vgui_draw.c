@@ -12,9 +12,6 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
-
-#ifndef XASH_DEDICATED
-
 #include <string.h>
 #include "common.h"
 #include "client.h"
@@ -23,8 +20,9 @@ GNU General Public License for more details.
 #include "library.h"
 #include "keydefs.h"
 #include "ref_common.h"
+#include "input.h"
 #ifdef XASH_SDL
-#include <SDL_events.h>
+#include <SDL.h>
 static SDL_Cursor* s_pDefaultCursor[20];
 #endif
 #include "platform/platform.h"
@@ -71,7 +69,7 @@ void GAME_EXPORT VGUI_GetMousePos( int *_x, int *_y )
 void VGUI_InitCursors( void )
 {
 	// load up all default cursors
-#ifdef XASH_SDL
+#if SDL_VERSION_ATLEAST( 2, 0, 0 )
 	s_pDefaultCursor[dc_none] = NULL;
 	s_pDefaultCursor[dc_arrow] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
 	s_pDefaultCursor[dc_ibeam] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
@@ -107,7 +105,11 @@ void GAME_EXPORT VGUI_CursorSelect(enum VGUI_DefaultCursor cursor )
 		break;
 	}
 
-#ifdef XASH_SDL
+#if SDL_VERSION_ATLEAST( 2, 0, 0 )
+	/// TODO: platform cursors
+
+	if( CVAR_TO_BOOL( touch_emulate ) )
+		return;
 	if( host.mouse_visible )
 	{
 		SDL_SetRelativeMouseMode( SDL_FALSE );
@@ -218,7 +220,7 @@ VGui_Startup
 Load vgui_support library and call VGui_Startup
 ================
 */
-void VGui_Startup( int width, int height )
+void VGui_Startup( const char *clientlib, int width, int height )
 {
 	static qboolean failed = false;
 
@@ -238,7 +240,7 @@ void VGui_Startup( int width, int height )
 		VGui_FillAPIFromRef( &vgui, &ref.dllFuncs );
 
 #ifdef XASH_INTERNAL_GAMELIBS
-		s_pVGuiSupport = COM_LoadLibrary( "client", false, false );
+		s_pVGuiSupport = COM_LoadLibrary( clientlib, false, false );
 
 		if( s_pVGuiSupport )
 		{
@@ -266,7 +268,7 @@ void VGui_Startup( int width, int height )
 				Con_Reportf( S_WARN "VGUI preloading failed. Default library will be used! Reason: %s\n", COM_GetLibraryError());
 		}
 
-		if( Q_strstr( GI->client_lib, ".dll" ) )
+		if( Q_strstr( clientlib, ".dll" ) )
 			Q_strncpy( vguiloader, "vgui_support.dll", 256 );
 
 		if( !vguiloader[0] && !Sys_GetParmFromCmdLine( "-vguiloader", vguiloader ) )
@@ -316,7 +318,7 @@ void VGui_Startup( int width, int height )
 		width = 1280;
 	else if( width <= 1600 )
 		width = 1600;
-#ifdef DLL_LOADER
+#ifdef XASH_DLL_LOADER
 	else if ( Q_strstr( vguiloader, ".dll" ) )
 		width = 1600;
 #endif
@@ -528,22 +530,21 @@ void VGui_MouseMove( int x, int y )
 		vgui.MouseMove( x / xscale, y / yscale );
 }
 
-void VGui_Paint()
+void VGui_Paint( void )
 {
 	if(vgui.initialized)
 		vgui.Paint();
 }
 
-void VGui_RunFrame()
+void VGui_RunFrame( void )
 {
 	//stub
 }
 
 
-void *GAME_EXPORT VGui_GetPanel()
+void *GAME_EXPORT VGui_GetPanel( void )
 {
 	if( vgui.initialized )
 		return vgui.GetPanel();
 	return NULL;
 }
-#endif

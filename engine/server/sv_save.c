@@ -498,8 +498,10 @@ static void AgeSaveList( const char *pName, int count )
 	FS_Delete( newName );
 	FS_Delete( newShot );
 
+#if !XASH_DEDICATED
 	// unloading the shot footprint
 	GL_FreeImage( newShot );
+#endif // XASH_DEDICATED
 
 	while( count > 0 )
 	{
@@ -519,37 +521,16 @@ static void AgeSaveList( const char *pName, int count )
 		Q_snprintf( newName, sizeof( newName ), "%s%s%02d.sav", DEFAULT_SAVE_DIRECTORY, pName, count );
 		Q_snprintf( newShot, sizeof( newShot ), "%s%s%02d.bmp", DEFAULT_SAVE_DIRECTORY, pName, count );
 
+#if !XASH_DEDICATED
 		// unloading the oldshot footprint too
 		GL_FreeImage( oldShot );
+#endif // XASH_DEDICATED
 
 		// scroll the name list down (e.g. rename quick04.sav to quick05.sav)
 		FS_Rename( oldName, newName );
 		FS_Rename( oldShot, newShot );
 		count--;
 	}
-}
-
-/*
-================== 
-SaveGetName
-
-build the savename
-================== 
-*/  
-static qboolean SaveGetName( int lastnum, char *filename )
-{
-	int	a, b, c;
-
-	if( lastnum < 0 || lastnum > 999 )
-		return false;
-
-	a = lastnum / 100;
-	lastnum -= a * 100;
-	b = lastnum / 10;
-	c = lastnum % 10;
-
-	Q_sprintf( filename, "save%i%i%i", a, b, c );
-	return true;
 }
 
 /*
@@ -1130,7 +1111,7 @@ static void SaveClientState( SAVERESTOREDATA *pSaveData, const char *level, int 
 	decalList = (decallist_t *)Z_Calloc( sizeof( decallist_t ) * MAX_RENDER_DECALS * 2 );
 
 	// initialize client header
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	if( !Host_IsDedicated() )
 	{
 		header.decalCount = ref.dllFuncs.R_CreateDecalList( decalList );
@@ -1147,7 +1128,7 @@ static void SaveClientState( SAVERESTOREDATA *pSaveData, const char *level, int 
 	{
 	 	// sounds won't going across transition
 		header.soundCount = S_GetCurrentDynamicSounds( soundInfo, MAX_CHANNELS );
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 		// music not reqiured to save position: it's just continue playing on a next level
 		S_StreamGetCurrentState( header.introTrack, header.mainTrack, &header.trackPosition );
 #endif
@@ -2092,9 +2073,9 @@ SV_SaveGame
 */  
 void SV_SaveGame( const char *pName )
 {
-	char	comment[80];
-	int	n, result;
-	string	savename;
+	char   comment[80];
+	int    result;
+	string savename;
 
 	if( !COM_CheckString( pName ))
 		return;
@@ -2104,11 +2085,12 @@ void SV_SaveGame( const char *pName )
 
 	if( !Q_stricmp( pName, "new" ))
 	{
+		int n;
+
 		// scan for a free filename
 		for( n = 0; n < 1000; n++ )
 		{
-			if( !SaveGetName( n, savename ))
-				return;
+			Q_snprintf( savename, sizeof( savename ), "save%03d", n );
 
 			if( !FS_FileExists( va( "%s%s.sav", DEFAULT_SAVE_DIRECTORY, savename ), true ))
 				break;
@@ -2122,16 +2104,18 @@ void SV_SaveGame( const char *pName )
 	}
 	else Q_strncpy( savename, pName, sizeof( savename ));
 
+#if !XASH_DEDICATED
 	// unload previous image from memory (it's will be overwritten)
 	GL_FreeImage( va( "%s%s.bmp", DEFAULT_SAVE_DIRECTORY, savename ));
+#endif // XASH_DEDICATED
 
 	SaveBuildComment( comment, sizeof( comment ));
 	result = SaveGameSlot( savename, comment );
 
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	if( result && !FBitSet( host.features, ENGINE_QUAKE_COMPATIBLE ))
 		CL_HudMessage( "GAMESAVED" ); // defined in titles.txt
-#endif
+#endif // XASH_DEDICATED
 }
 
 /* 
@@ -2182,7 +2166,7 @@ SV_GetSaveComment
 check savegame for valid
 ================== 
 */
-int SV_GetSaveComment( const char *savename, char *comment )
+int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 {
 	int	i, tag, size, nNumberOfFields, nFieldSize, tokenSize, tokenCount;
 	char	*pData, *pSaveData, *pFieldName, **pTokenList;

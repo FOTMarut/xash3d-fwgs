@@ -13,7 +13,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
-#ifdef _WIN32
+#include "build.h"
+#if XASH_WIN32
 #include "common.h"
 #include "client.h"
 #include <vfw.h> // video for windows
@@ -251,7 +252,7 @@ qboolean AVI_ACMConvertAudio( movie_state_t *Avi )
 	return true;
 }
 
-qboolean AVI_GetVideoInfo( movie_state_t *Avi, long *xres, long *yres, float *duration )
+qboolean AVI_GetVideoInfo( movie_state_t *Avi, int *xres, int *yres, float *duration )
 {
 	if( !Avi->active )
 		return false;
@@ -269,7 +270,7 @@ qboolean AVI_GetVideoInfo( movie_state_t *Avi, long *xres, long *yres, float *du
 }
 
 // returns a unique frame identifier
-long AVI_GetVideoFrameNumber( movie_state_t *Avi, float time )
+int AVI_GetVideoFrameNumber( movie_state_t *Avi, float time )
 {
 	if( !Avi->active )
 		return 0;
@@ -277,7 +278,7 @@ long AVI_GetVideoFrameNumber( movie_state_t *Avi, float time )
 	return (time * Avi->video_fps);
 }
 
-long AVI_GetVideoFrameCount( movie_state_t *Avi )
+int AVI_GetVideoFrameCount( movie_state_t *Avi )
 {
 	if( !Avi->active )
 		return 0;
@@ -285,7 +286,7 @@ long AVI_GetVideoFrameCount( movie_state_t *Avi )
 	return Avi->video_frames;
 }
 
-long AVI_TimeToSoundPosition( movie_state_t *Avi, long time )
+int AVI_TimeToSoundPosition( movie_state_t *Avi, int time )
 {
 	if( !Avi->active || !Avi->audio_stream )
 		return 0;
@@ -382,7 +383,7 @@ qboolean AVI_SeekPosition( movie_state_t *Avi, dword offset )
 }
 
 // get a chunk of audio from the stream (in bytes)
-long AVI_GetAudioChunk( movie_state_t *Avi, char *audiodata, long offset, long length )
+int AVI_GetAudioChunk( movie_state_t *Avi, char *audiodata, int offset, int length )
 {
 	long	result = 0;
 	int	i;
@@ -405,7 +406,7 @@ long AVI_GetAudioChunk( movie_state_t *Avi, char *audiodata, long offset, long l
 			for( i = 0; i < length; i++ )
 				audiodata[i] = 0;
 
-			return length;
+//			return length;
 		}
 	}
 

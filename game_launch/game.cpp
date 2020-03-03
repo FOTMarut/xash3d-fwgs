@@ -28,7 +28,7 @@ GNU General Public License for more details.
 	#endif
 	#define XASHLIB "xash.dll"
 	#define dlerror() GetStringLastError()
-	#include <windows.h>
+	#include <shellapi.h> // CommandLineToArgvW
 #endif
 
 #ifdef WIN32
@@ -153,7 +153,7 @@ int __stdcall WinMain( HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdLine, int 
 	int ret, i;
 
 	lpArgv = CommandLineToArgvW( GetCommandLineW(), &szArgc );
-	szArgv = ( char** )malloc( szArgc * sizeof( char* ));
+	szArgv = ( char** )malloc( (szArgc + 1) * sizeof( char* ));
 
 	for( i = 0; i < szArgc; ++i )
 	{
@@ -161,6 +161,7 @@ int __stdcall WinMain( HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdLine, int 
 		szArgv[i] = ( char* )malloc( size );
 		wcstombs( szArgv[i], lpArgv[i], size );
 	}
+	szArgv[szArgc] = 0;
 
 	LocalFree( lpArgv );
 

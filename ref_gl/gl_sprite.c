@@ -51,15 +51,16 @@ R_SpriteLoadFrame
 upload a single frame
 ====================
 */
-static dframetype_t *R_SpriteLoadFrame( model_t *mod, void *pin, mspriteframe_t **ppframe, int num )
+static const dframetype_t *R_SpriteLoadFrame( model_t *mod, const void *pin, mspriteframe_t **ppframe, int num )
 {
-	dspriteframe_t	*pinframe;
+	dspriteframe_t	pinframe;
 	mspriteframe_t	*pspriteframe;
 	int		gl_texturenum = 0;
 	char		texname[128];
 	int		bytes = 1;
 
-	pinframe = (dspriteframe_t *)pin;
+	memcpy( &pinframe, pin, sizeof(dspriteframe_t));
+
 	if( sprite_version == SPRITE_VERSION_32 )
 		bytes = 4;
 
@@ -67,26 +68,26 @@ static dframetype_t *R_SpriteLoadFrame( model_t *mod, void *pin, mspriteframe_t 
 	if( FBitSet( mod->flags, MODEL_CLIENT )) // it's a HUD sprite
 	{
 		Q_snprintf( texname, sizeof( texname ), "#HUD/%s(%s:%i%i).spr", sprite_name, group_suffix, num / 10, num % 10 );
-		gl_texturenum = GL_LoadTexture( texname, pin, pinframe->width * pinframe->height * bytes, r_texFlags );
+		gl_texturenum = GL_LoadTexture( texname, pin, pinframe.width * pinframe.height * bytes, r_texFlags );
 	}
 	else
 	{
 		Q_snprintf( texname, sizeof( texname ), "#%s(%s:%i%i).spr", sprite_name, group_suffix, num / 10, num % 10 );
-		gl_texturenum = GL_LoadTexture( texname, pin, pinframe->width * pinframe->height * bytes, r_texFlags );
+		gl_texturenum = GL_LoadTexture( texname, pin, pinframe.width * pinframe.height * bytes, r_texFlags );
 	}	
 
 	// setup frame description
 	pspriteframe = Mem_Malloc( mod->mempool, sizeof( mspriteframe_t ));
-	pspriteframe->width = pinframe->width;
-	pspriteframe->height = pinframe->height;
-	pspriteframe->up = pinframe->origin[1];
-	pspriteframe->left = pinframe->origin[0];
-	pspriteframe->down = pinframe->origin[1] - pinframe->height;
-	pspriteframe->right = pinframe->width + pinframe->origin[0];
+	pspriteframe->width = pinframe.width;
+	pspriteframe->height = pinframe.height;
+	pspriteframe->up = pinframe.origin[1];
+	pspriteframe->left = pinframe.origin[0];
+	pspriteframe->down = pinframe.origin[1] - pinframe.height;
+	pspriteframe->right = pinframe.width + pinframe.origin[0];
 	pspriteframe->gl_texturenum = gl_texturenum;
 	*ppframe = pspriteframe;
 
-	return (dframetype_t *)((byte *)(pinframe + 1) + pinframe->width * pinframe->height * bytes );
+	return ( const dframetype_t* )(( const byte* )pin + sizeof( dspriteframe_t ) + pinframe.width * pinframe.height * bytes );
 }
 
 /*
@@ -96,16 +97,16 @@ R_SpriteLoadGroup
 upload a group frames
 ====================
 */
-static dframetype_t *R_SpriteLoadGroup( model_t *mod, void *pin, mspriteframe_t **ppframe, int framenum )
+static const dframetype_t *R_SpriteLoadGroup( model_t *mod, const void *pin, mspriteframe_t **ppframe, int framenum )
 {
-	dspritegroup_t	*pingroup;
+	const dspritegroup_t	*pingroup;
 	mspritegroup_t	*pspritegroup;
-	dspriteinterval_t	*pin_intervals;
+	const dspriteinterval_t	*pin_intervals;
 	float		*poutintervals;
 	int		i, groupsize, numframes;
-	void		*ptemp;
+	const void		*ptemp;
 
-	pingroup = (dspritegroup_t *)pin;
+	pingroup = (const dspritegroup_t *)pin;
 	numframes = pingroup->numframes;
 
 	groupsize = sizeof( mspritegroup_t ) + (numframes - 1) * sizeof( pspritegroup->frames[0] );
@@ -113,7 +114,7 @@ static dframetype_t *R_SpriteLoadGroup( model_t *mod, void *pin, mspriteframe_t 
 	pspritegroup->numframes = numframes;
 
 	*ppframe = (mspriteframe_t *)pspritegroup;
-	pin_intervals = (dspriteinterval_t *)(pingroup + 1);
+	pin_intervals = (const dspriteinterval_t *)(pingroup + 1);
 	poutintervals = Mem_Calloc( mod->mempool, numframes * sizeof( float ));
 	pspritegroup->intervals = poutintervals;
 
@@ -126,13 +127,13 @@ static dframetype_t *R_SpriteLoadGroup( model_t *mod, void *pin, mspriteframe_t 
 		pin_intervals++;
 	}
 
-	ptemp = (void *)pin_intervals;
+	ptemp = (const void *)pin_intervals;
 	for( i = 0; i < numframes; i++ )
 	{
 		ptemp = R_SpriteLoadFrame( mod, ptemp, &pspritegroup->frames[i], framenum * 10 + i );
 	}
 
-	return (dframetype_t *)ptemp;
+	return (const dframetype_t *)ptemp;
 }
 
 /*
@@ -205,7 +206,7 @@ void Mod_LoadSpriteModel( model_t *mod, const void *buffer, qboolean *loaded, ui
 	for( i = 0; i < mod->numframes; i++ )
 	{
 		frametype_t frametype = pframetype->type;
-		psprite->frames[i].type = frametype;
+		psprite->frames[i].type = (spriteframetype_t)frametype;
 
 		switch( frametype )
 		{
@@ -480,7 +481,7 @@ float R_GetSpriteFrameInterpolant( cl_entity_t *ent, mspriteframe_t **oldframe, 
 	if( frame < 0 )
 	{
 		frame = 0;
-	}          
+	}
 	else if( frame >= psprite->numframes )
 	{
 		gEngfuncs.Con_Reportf( S_WARN "R_GetSpriteFrameInterpolant: no such frame %d (%s)\n", frame, ent->model->name );
@@ -499,7 +500,7 @@ float R_GetSpriteFrameInterpolant( cl_entity_t *ent, mspriteframe_t **oldframe, 
 				ent->latched.sequencetime = gpGlobals->time;
 				lerpFrac = 1.0f;
 			}
-                              
+
 			if( ent->latched.sequencetime < gpGlobals->time )
 			{
 				if( frame != ent->latched.prevblending[1] )
@@ -744,7 +745,7 @@ static void R_DrawSpriteQuad( mspriteframe_t *frame, vec3_t org, vec3_t v_right,
 		VectorMA( org, frame->up * scale, v_up, point );
 		VectorMA( point, frame->right * scale, v_right, point );
 		pglVertex3fv( point );
- 	        	pglTexCoord2f( 1.0f, 1.0f );
+		pglTexCoord2f( 1.0f, 1.0f );
 		VectorMA( org, frame->down * scale, v_up, point );
 		VectorMA( point, frame->right * scale, v_right, point );
 		pglVertex3fv( point );
@@ -857,6 +858,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	{
 	case kRenderTransAlpha:
 		pglDepthMask( GL_FALSE );
+		// fallthrough
 	case kRenderTransColor:
 	case kRenderTransTexture:
 		pglEnable( GL_BLEND );
@@ -864,6 +866,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 		break;
 	case kRenderGlow:
 		pglDisable( GL_DEPTH_TEST );
+		// fallthrough
 	case kRenderTransAdd:
 		pglEnable( GL_BLEND );
 		pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
@@ -892,7 +895,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 		color[1] = 1.0f;
 		color[2] = 1.0f;
 	}
-          
+
 	if( R_SpriteHasLightmap( e, psprite->texFormat ))
 	{
 		colorVec lightColor = R_LightPoint( origin );

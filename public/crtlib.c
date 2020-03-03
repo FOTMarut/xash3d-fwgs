@@ -21,6 +21,10 @@ GNU General Public License for more details.
 #include <time.h>
 #include "stdio.h"
 #include "crtlib.h"
+#if HAVE_TGMATH_H
+#include <tgmath.h>
+#endif
+
 void Q_strnupr( const char *in, char *out, size_t size_out )
 {
 	if( size_out == 0 ) return;
@@ -183,8 +187,8 @@ size_t Q_strncpy( char *dst, const char *src, size_t size )
 
 int Q_atoi( const char *str )
 {
-	int       val = 0;
-	int	c, sign;
+	int val = 0;
+	int c, sign;
 
 	if( !str ) return 0;
 
@@ -361,7 +365,7 @@ int Q_strnicmp( const char *s1, const char *s2, int n )
 	else if( s2 == NULL )
 	{
 		return 1;
-          }
+	}
 
 	do {
 		c1 = *s1++;
@@ -569,7 +573,7 @@ int Q_vsnprintf( char *buffer, size_t buffersize, const char *format, va_list ar
 	}
 #endif
 
-	if( result < 0 || result >= buffersize )
+	if( result >= buffersize )
 	{
 		buffer[buffersize - 1] = '\0';
 		return -1;
@@ -652,7 +656,7 @@ char *Q_pretifymem( float value, int digitsafterdecimal )
 	digitsafterdecimal = max( digitsafterdecimal, 0 );
 
 	// if it's basically integral, don't do any decimals
-	if( fabs( value - (int)value ) < 0.00001 )
+	if( fabs( value - (int)value ) < 0.00001f )
 	{
 		Q_sprintf( val, "%i%s", (int)value, suffix );
 	}
@@ -662,7 +666,7 @@ char *Q_pretifymem( float value, int digitsafterdecimal )
 
 		// otherwise, create a format string for the decimals
 		Q_sprintf( fmt, "%%.%if%s", digitsafterdecimal, suffix );
-		Q_sprintf( val, fmt, value );
+		Q_sprintf( val, fmt, (double)value );
 	}
 
 	// copy from in to out
@@ -706,11 +710,11 @@ of all text functions.
 char *va( const char *format, ... )
 {
 	va_list		argptr;
-	static char	string[256][1024], *s;
+	static char	string[16][1024], *s;
 	static int	stringindex = 0;
 
 	s = string[stringindex];
-	stringindex = (stringindex + 1) & 255;
+	stringindex = (stringindex + 1) & 15;
 	va_start( argptr, format );
 	Q_vsnprintf( s, sizeof( string[0] ), format, argptr );
 	va_end( argptr );
@@ -884,4 +888,70 @@ void COM_ReplaceExtension( char *path, const char *extension )
 {
 	COM_StripExtension( path );
 	COM_DefaultExtension( path, extension );
+}
+
+int matchpattern( const char *in, const char *pattern, qboolean caseinsensitive )
+{
+	return matchpattern_with_separator( in, pattern, caseinsensitive, "/\\:", false );
+}
+
+// wildcard_least_one: if true * matches 1 or more characters
+//                     if false * matches 0 or more characters
+int matchpattern_with_separator( const char *in, const char *pattern, qboolean caseinsensitive, const char *separators, qboolean wildcard_least_one )
+{
+	int c1, c2;
+
+	while( *pattern )
+	{
+		switch( *pattern )
+		{
+		case 0:
+			return 1; // end of pattern
+		case '?': // match any single character
+			if( *in == 0 || Q_strchr( separators, *in ))
+				return 0; // no match
+			in++;
+			pattern++;
+			break;
+		case '*': // match anything until following string
+			if( wildcard_least_one )
+			{
+				if( *in == 0 || Q_strchr( separators, *in ))
+					return 0; // no match
+				in++;
+			}
+			pattern++;
+			while( *in )
+			{
+				if( Q_strchr(separators, *in ))
+					break;
+				// see if pattern matches at this offset
+				if( matchpattern_with_separator(in, pattern, caseinsensitive, separators, wildcard_least_one ))
+					return 1;
+				// nope, advance to next offset
+				in++;
+			}
+			break;
+		default:
+			if( *in != *pattern )
+			{
+				if( !caseinsensitive )
+					return 0; // no match
+				c1 = *in;
+				if( c1 >= 'A' && c1 <= 'Z' )
+					c1 += 'a' - 'A';
+				c2 = *pattern;
+				if( c2 >= 'A' && c2 <= 'Z' )
+					c2 += 'a' - 'A';
+				if( c1 != c2 )
+					return 0; // no match
+			}
+			in++;
+			pattern++;
+			break;
+		}
+	}
+	if( *in )
+		return 0; // reached end of pattern but not end of input
+	return 1; // success
 }

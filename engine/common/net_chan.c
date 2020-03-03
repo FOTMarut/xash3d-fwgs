@@ -25,7 +25,7 @@ GNU General Public License for more details.
 
 #define UDP_HEADER_SIZE		28
 
-#define FLOW_AVG			( 2.0 / 3.0 )	// how fast to converge flow estimates
+#define FLOW_AVG			( 2.0f / 3.0f )	// how fast to converge flow estimates
 #define FLOW_INTERVAL		0.1		// don't compute more often than this    
 #define MAX_RELIABLE_PAYLOAD		1400		// biggest packet that has frag and or reliable data
 
@@ -140,7 +140,7 @@ qboolean NetSplit_GetLong( netsplit_t *ns, netadr_t *from, byte *data, size_t *l
 		// warn if previous packet not received
 		if( p->received < p->count )
 		{
-			//CL_WarnLostSplitPacket();
+			UI_ShowConnectionWarning();
 			Con_Reportf( S_WARN "NetSplit_GetLong: lost packet %d\n", p->id );
 		}
 
@@ -351,7 +351,7 @@ Returns true if the bandwidth choke isn't active
 qboolean Netchan_CanPacket( netchan_t *chan, qboolean choke )
 {
 	// never choke loopback packets.
-	if( !choke || !net_chokeloopback->value && NET_IsLocalAddress( chan->remote_address ))
+	if( !choke || ( !net_chokeloopback->value && NET_IsLocalAddress( chan->remote_address ) ))
 	{
 		chan->cleartime = host.realtime;
 		return true;
@@ -528,7 +528,7 @@ void Netchan_OutOfBandPrint( int net_socket, netadr_t adr, char *format, ... )
 	Q_vsnprintf( string, sizeof( string ) - 1, format, argptr );
 	va_end( argptr );
 
-	Netchan_OutOfBand( net_socket, adr, Q_strlen( string ), string );
+	Netchan_OutOfBand( net_socket, adr, Q_strlen( string ), (byte *)string );
 }
 
 /*
@@ -605,7 +605,7 @@ void Netchan_UpdateFlow( netchan_t *chan )
 		}
 
 		pflow->kbytespersec = (faccumulatedtime == 0.0f) ? 0.0f : bytes / faccumulatedtime / 1024.0f;
-		pflow->avgkbytespersec = pflow->avgkbytespersec * FLOW_AVG + pflow->kbytespersec * (1.0 - FLOW_AVG);
+		pflow->avgkbytespersec = pflow->avgkbytespersec * FLOW_AVG + pflow->kbytespersec * (1.0f - FLOW_AVG);
 	}
 }
 
@@ -953,7 +953,7 @@ int Netchan_CreateFileFragments( netchan_t *chan, const char *filename )
 	int		send, pos;
 	int		remaining;
 	int		bufferid = 1;
-	int		filesize = 0;
+	fs_offset_t	filesize = 0;
 	char		compressedfilename[MAX_OSPATH];
 	int		compressedFileTime;
 	int		fileTime;
@@ -1312,7 +1312,7 @@ Netchan_UpdateProgress
 */
 void Netchan_UpdateProgress( netchan_t *chan )
 {
-#ifndef XASH_DEDICATED
+#if !XASH_DEDICATED
 	fragbuf_t *p;
 	int	i, c = 0;
 	int	total = 0;
@@ -1640,7 +1640,7 @@ void Netchan_TransmitBits( netchan_t *chan, int length, byte *data )
 		if( chan->pfnBlockSize )
 			maxsize = chan->pfnBlockSize( chan->client, FRAGSIZE_UNRELIABLE );
 
-		if( MSG_GetNumBytesWritten( &send ) + length >> 3 <= maxsize )
+		if( (( MSG_GetNumBytesWritten( &send ) + length ) >> 3) <= maxsize )
 			MSG_WriteBits( &send, data, length );
 		else Con_Printf( S_WARN "Netchan_Transmit: unreliable message overflow: %d\n", MSG_GetNumBytesWritten( &send ) );
 	}
@@ -1678,7 +1678,7 @@ void Netchan_TransmitBits( netchan_t *chan, int length, byte *data )
 		NET_SendPacketEx( chan->sock, MSG_GetNumBytesWritten( &send ), MSG_GetData( &send ), chan->remote_address, splitsize );
 	}
 
-	if( SV_Active() && sv_lan.value && sv_lan_rate.value > 1000.0 )
+	if( SV_Active() && sv_lan.value && sv_lan_rate.value > 1000.0f )
 		fRate = 1.0f / sv_lan_rate.value;
 	else fRate = 1.0f / chan->rate;
 

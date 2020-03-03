@@ -25,13 +25,13 @@ GNU General Public License for more details.
 Image_LoadPAL
 ============
 */
-qboolean Image_LoadPAL( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadPAL( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	int	rendermode = LUMP_NORMAL; 
 
 	if( filesize != 768 )
 	{
-		Con_DPrintf( S_ERROR "Image_LoadPAL: (%s) have invalid size (%d should be %d)\n", name, filesize, 768 );
+		Con_DPrintf( S_ERROR "Image_LoadPAL: (%s) have invalid size (%ld should be %d)\n", name, filesize, 768 );
 		return false;
 	}
 
@@ -74,7 +74,7 @@ qboolean Image_LoadPAL( const char *name, const byte *buffer, size_t filesize )
 Image_LoadFNT
 ============
 */
-qboolean Image_LoadFNT( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadFNT( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	qfont_t		font;
 	const byte	*pal, *fin;
@@ -147,7 +147,7 @@ void Image_SetMDLPointer( byte *p )
 Image_LoadMDL
 ============
 */
-qboolean Image_LoadMDL( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadMDL( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	byte		*fin;
 	size_t		pixels;
@@ -197,10 +197,11 @@ qboolean Image_LoadMDL( const char *name, const byte *buffer, size_t filesize )
 Image_LoadSPR
 ============
 */
-qboolean Image_LoadSPR( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesize )
 {
-	dspriteframe_t	*pin;	// identical for q1\hl sprites
+	dspriteframe_t	pin;	// identical for q1\hl sprites
 	qboolean		truecolor = false;
+	byte *fin;
 
 	if( image.hint == IL_HINT_HL )
 	{
@@ -217,9 +218,9 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, size_t filesize )
 		return false;
 	}
 
-	pin = (dspriteframe_t *)buffer;
-	image.width = pin->width;
-	image.height = pin->height;
+	memcpy( &pin, buffer, sizeof(dspriteframe_t) );
+	image.width = pin.width;
+	image.height = pin.height;
 
 	if( filesize < image.width * image.height )
 		return false;
@@ -237,23 +238,25 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, size_t filesize )
 	{
 	case LUMP_MASKED:
 		SetBits( image.flags, IMAGE_ONEBIT_ALPHA );
+		// intentionally fallthrough
 	case LUMP_GRADIENT:
 	case LUMP_QUAKE1:
 		SetBits( image.flags, IMAGE_HAS_ALPHA );
 		break;
 	}
+	
+	fin =  (byte *)(buffer + sizeof(dspriteframe_t));
 
 	if( truecolor )
 	{
 		// spr32 support
 		image.size = image.width * image.height * 4;
 		image.rgba = Mem_Malloc( host.imagepool, image.size );
-		memcpy( image.rgba, (byte *)(pin + 1), image.size );
+		memcpy( image.rgba, fin, image.size );
 		SetBits( image.flags, IMAGE_HAS_COLOR ); // Color. True Color!
 		return true;
 	}
-
-	return Image_AddIndexedImageToPack( (byte *)(pin + 1), image.width, image.height );
+	return Image_AddIndexedImageToPack( fin, image.width, image.height );
 }
 
 /*
@@ -261,7 +264,7 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, size_t filesize )
 Image_LoadLMP
 ============
 */
-qboolean Image_LoadLMP( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadLMP( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	lmp_t	lmp;
 	byte	*fin, *pal;
@@ -302,7 +305,7 @@ qboolean Image_LoadLMP( const char *name, const byte *buffer, size_t filesize )
 		return false;
 
 	if( !Image_ValidSize( name ))
-		return false;         
+		return false;
 
 	if( image.hint != IL_HINT_Q1 && filesize > (int)sizeof(lmp) + pixels )
 	{
@@ -346,7 +349,7 @@ qboolean Image_LoadLMP( const char *name, const byte *buffer, size_t filesize )
 Image_LoadMIP
 =============
 */
-qboolean Image_LoadMIP( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadMIP( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	mip_t	mip;
 	qboolean	hl_texture;
@@ -482,7 +485,7 @@ qboolean Image_LoadMIP( const char *name, const byte *buffer, size_t filesize )
 
 	// check for half-life water texture
 	if( hl_texture && ( mip.name[0] == '!' || !Q_strnicmp( mip.name, "water", 5 )))
-          {
+	{
 		// grab the fog color
 		image.fogParams[0] = pal[3*3+0];
 		image.fogParams[1] = pal[3*3+1];
@@ -490,16 +493,16 @@ qboolean Image_LoadMIP( const char *name, const byte *buffer, size_t filesize )
 
 		// grab the fog density
 		image.fogParams[3] = pal[4*3+0];
-          }
-          else if( hl_texture && ( rendermode == LUMP_GRADIENT ))
-          {
+	}
+	else if( hl_texture && ( rendermode == LUMP_GRADIENT ))
+	{
 		// grab the decal color
 		image.fogParams[0] = pal[255*3+0];
 		image.fogParams[1] = pal[255*3+1];
 		image.fogParams[2] = pal[255*3+2];
 
 		// calc the decal reflectivity
-		image.fogParams[3] = VectorAvg( image.fogParams );         
+		image.fogParams[3] = VectorAvg( image.fogParams );
 	}
 	else if( pal != NULL )
 	{

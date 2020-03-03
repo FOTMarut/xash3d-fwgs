@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #ifndef CLIENT_H
 #define CLIENT_H
 
+#include "xash3d_types.h"
 #include "mathlib.h"
 #include "cdll_int.h"
 #include "menu_int.h"
@@ -37,8 +38,6 @@ GNU General Public License for more details.
 #define SPR_CLIENT		0	// client sprite for temp-entities or user-textures
 #define SPR_HUDSPRITE	1	// hud sprite
 #define SPR_MAPSPRITE	2	// contain overview.bmp that diced into frames 128x128
-
-typedef int		sound_t;
 
 //=============================================================================
 typedef struct netbandwithgraph_s
@@ -96,7 +95,11 @@ typedef struct
 #define ANGLE_MASK		(ANGLE_BACKUP - 1)
 
 #define CL_UPDATE_MASK	(CL_UPDATE_BACKUP - 1)
+#if XASH_LOW_MEMORY == 2
+#define CL_UPDATE_BACKUP SINGLEPLAYER_BACKUP
+#else
 extern int CL_UPDATE_BACKUP;
+#endif
 
 #define SIGNONS		2		// signon messages to receive before connected
 #define INVALID_HANDLE	0xFFFF		// for XashXT cache system
@@ -265,6 +268,8 @@ typedef struct
 	short		decal_index[MAX_DECALS];
 
 	model_t		*worldmodel;			// pointer to world
+
+	int lostpackets;					// count lost packets and show dialog in menu
 } client_t;
 
 /*
@@ -482,12 +487,15 @@ typedef struct
 
 	efrag_t		*free_efrags;		// linked efrags
 	cl_entity_t	viewent;			// viewmodel
+
+	qboolean client_dll_uses_sdl;
 } clgame_static_t;
 
 typedef struct
 {
 	void		*hInstance;		// pointer to client.dll
 	UI_FUNCTIONS	dllFuncs;			// dll exported funcs
+	UI_EXTENDED_FUNCTIONS dllFuncs2;	// fwgs extension
 	byte		*mempool;			// client edicts pool
 
 	cl_entity_t	playermodel;		// uiPlayerSetup drawing model
@@ -556,7 +564,7 @@ typedef struct
 	double		packet_loss_recalc_time;
 	int		starting_count;		// message num readed bits
 
-	float		nextcmdtime;		// when can we send the next command packet?                
+	float		nextcmdtime;		// when can we send the next command packet?
 	int		lastoutgoingcommand;	// sequence number of last outgoing command
 	int		lastupdate_sequence;	// prediction stuff
 
@@ -602,7 +610,7 @@ typedef struct
 
 	// demo recording info must be here, so it isn't clearing on level change
 	qboolean		demorecording;
-	qboolean		demoplayback;
+	int			demoplayback;
 	qboolean		demowaiting;		// don't record until a non-delta message is received
 	qboolean		timedemo;
 	string		demoname;			// for demo looping
@@ -613,11 +621,15 @@ typedef struct
 	file_t		*demoheader;		// contain demo startup info in case we record a demo on this level
 	qboolean internetservers_wait;	// internetservers is waiting for dns request
 	qboolean internetservers_pending;	// internetservers is waiting for dns request
+
+	// legacy mode support
 	qboolean legacymode;				// one-way 48 protocol compatibility
 	netadr_t legacyserver;
 	netadr_t legacyservers[MAX_LEGACY_SERVERS];
 	int	legacyservercount;
 	int extensions;
+
+	netadr_t serveradr;
 } client_static_t;
 
 #ifdef __cplusplus
@@ -680,7 +692,9 @@ extern convar_t	*scr_loading;
 extern convar_t	*v_dark;	// start from dark
 extern convar_t	*net_graph;
 extern convar_t	*rate;
-extern convar_t *m_ignore;
+extern convar_t	*m_ignore;
+extern convar_t	*r_showtree;
+extern convar_t	*ui_renderworld;
 
 //=============================================================================
 
@@ -695,7 +709,7 @@ dlight_t *CL_GetEntityLight( int number );
 //
 // cl_cmds.c
 //
-void CL_Quit_f( void );
+void CL_Quit_f( void ) NORETURN;
 void CL_ScreenShot_f( void );
 void CL_SnapShot_f( void );
 void CL_PlayCDTrack_f( void );
@@ -939,9 +953,9 @@ void CL_EmitEntities( void );
 // cl_remap.c
 //
 remap_info_t *CL_GetRemapInfoForEntity( cl_entity_t *e );
-void CL_AllocRemapInfo( int topcolor, int bottomcolor );
+void CL_AllocRemapInfo( cl_entity_t *ent, int topcolor, int bottomcolor );
 void CL_FreeRemapInfo( remap_info_t *info );
-void CL_UpdateRemapInfo( int topcolor, int bottomcolor );
+void CL_UpdateRemapInfo( cl_entity_t *ent, int topcolor, int bottomcolor );
 void CL_ClearAllRemaps( void );
 
 //
@@ -1069,7 +1083,17 @@ qboolean UI_CreditsActive( void );
 void UI_CharEvent( int key );
 qboolean UI_MouseInRect( void );
 qboolean UI_IsVisible( void );
+void UI_ResetPing( void );
+void UI_ShowUpdateDialog( qboolean preferStore );
+void UI_ShowMessageBox( const char *text );
 void UI_AddTouchButtonToList( const char *name, const char *texture, const char *command, unsigned char *color, int flags );
+void UI_ConnectionProgress_Disconnect( void );
+void UI_ConnectionProgress_Download( const char *pszFileName, const char *pszServerName, const char *pszServerPath, int iCurrent, int iTotal, const char *comment );
+void UI_ConnectionProgress_DownloadEnd( void );
+void UI_ConnectionProgress_Precache( void );
+void UI_ConnectionProgress_Connect( const char *server );
+void UI_ConnectionProgress_ChangeLevel( void );
+void UI_ConnectionProgress_ParseServerInfo( const char *server );
 void pfnPIC_Set( HIMAGE hPic, int r, int g, int b, int a );
 void pfnPIC_Draw( int x, int y, int width, int height, const wrect_t *prc );
 void pfnPIC_DrawTrans( int x, int y, int width, int height, const wrect_t *prc );
@@ -1093,6 +1117,27 @@ qboolean SCR_NextMovie( void );
 void SCR_RunCinematic( void );
 void SCR_StopCinematic( void );
 void CL_PlayVideo_f( void );
+
+
+//
+// keys.c
+//
+int Key_IsDown( int keynum );
+const char *Key_IsBind( int keynum );
+void Key_Event( int key, int down );
+void Key_Init( void );
+void Key_WriteBindings( file_t *f );
+const char *Key_GetBinding( int keynum );
+void Key_SetBinding( int keynum, const char *binding );
+void Key_ClearStates( void );
+const char *Key_KeynumToString( int keynum );
+int Key_StringToKeynum( const char *str );
+int Key_GetKey( const char *binding );
+void Key_EnumCmds_f( void );
+void Key_SetKeyDest( int key_dest );
+void Key_EnableTextInput( qboolean enable, qboolean force );
+int Key_ToUpper( int key );
+void OSK_Draw( void );
 
 extern rgba_t g_color_table[8];
 

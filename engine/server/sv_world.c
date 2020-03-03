@@ -801,7 +801,7 @@ SV_PointContents
 
 =============
 */
-int SV_PointContents( const vec3_t p )
+int GAME_EXPORT SV_PointContents( const vec3_t p )
 {
 	int cont = SV_TruePointContents( p );
 
@@ -912,7 +912,7 @@ void SV_ClipMoveToEntity( edict_t *ent, const vec3_t start, vec3_t mins, vec3_t 
 
 		Matrix4x4_VectorITransform( matrix, start, start_l );
 		Matrix4x4_VectorITransform( matrix, end, end_l );
-                              
+
 		if( transform_bbox )
 		{
 			World_TransformAABB( matrix, mins, maxs, out_mins, out_maxs );
@@ -1113,6 +1113,7 @@ or custom physics implementation
 */
 void SV_CustomClipMoveToEntity( edict_t *ent, const vec3_t start, vec3_t mins, vec3_t maxs, const vec3_t end, trace_t *trace )
 {
+	// initialize custom trace
 	memset( trace, 0, sizeof( trace_t ));
 	VectorCopy( end, trace->endpos );
 	trace->allsolid = true;
@@ -1256,7 +1257,7 @@ static void SV_ClipToLinks( areanode_t *node, moveclip_t *clip )
 		if( !SV_ClipToEntity( touch, clip ))
 			return; // trace.allsoild
 	}
-	
+
 	// recurse down both sides
 	if( node->axis == -1 ) return;
 
@@ -1288,7 +1289,7 @@ static void SV_ClipToPortals( areanode_t *node, moveclip_t *clip )
 		if( !SV_ClipToEntity( touch, clip ))
 			return; // trace.allsoild
 	}
-	
+
 	// recurse down both sides
 	if( node->axis == -1 ) return;
 

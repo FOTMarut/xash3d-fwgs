@@ -18,7 +18,6 @@ GNU General Public License for more details.
 
 qboolean Image_CheckDXT3Alpha( dds_t *hdr, byte *fin )
 {
-	uint	bitmask;
 	word	sAlpha;
 	byte	*alpha; 
 	int	x, y, i, j; 
@@ -27,10 +26,8 @@ qboolean Image_CheckDXT3Alpha( dds_t *hdr, byte *fin )
 	{
 		for( x = 0; x < hdr->dwWidth; x += 4 )
 		{
-			alpha = fin;
-			fin += 8;
-			bitmask = ((uint *)fin)[1];
-			fin += 8;
+			alpha = fin + 8;
+			fin += 16;
 
 			for( j = 0; j < 4; j++ )
 			{
@@ -109,11 +106,13 @@ void Image_DXTGetPixelFormat( dds_t *hdr )
 			break;
 		case TYPE_DXT2:
 			image.flags &= ~IMAGE_HAS_ALPHA; // alpha is already premultiplied by color
+			// intentionally fallthrough
 		case TYPE_DXT3:
 			image.type = PF_DXT3;
 			break;
 		case TYPE_DXT4:
 			image.flags &= ~IMAGE_HAS_ALPHA; // alpha is already premultiplied by color
+			// intentionally fallthrough
 		case TYPE_DXT5:
 			image.type = PF_DXT5;
 			break;
@@ -138,11 +137,21 @@ void Image_DXTGetPixelFormat( dds_t *hdr )
 		}
 		else 
 		{
-			if( bits == 32 )
+			switch( bits )
+			{
+			case 32:
 				image.type = PF_BGRA_32;
-			else if( bits == 24 )
+				break;
+			case 24:
 				image.type = PF_BGR_24;
-			else image.type = PF_UNKNOWN; // assume error;
+				break;
+			case 8:
+				image.type = PF_LUMINANCE;
+				break;
+			default:
+				image.type = PF_UNKNOWN;
+				break;
+			}
 		}
 	}
 
@@ -162,6 +171,7 @@ size_t Image_DXTGetLinearSize( int type, int width, int height, int depth )
 	case PF_DXT3:
 	case PF_DXT5:
 	case PF_ATI2: return ((( width + 3 ) / 4 ) * (( height + 3 ) / 4 ) * depth * 16 );
+	case PF_LUMINANCE: return (width * height * depth);
 	case PF_BGR_24:
 	case PF_RGB_24: return (width * height * depth * 3);
 	case PF_BGRA_32:
@@ -217,7 +227,7 @@ uint Image_DXTCalcSize( const char *name, dds_t *hdr, size_t filesize )
 
 	if( filesize != buffsize ) // main check
 	{
-		Con_DPrintf( S_WARN "Image_LoadDDS: (%s) probably corrupted (%i should be %i)\n", name, buffsize, filesize );
+		Con_DPrintf( S_WARN "Image_LoadDDS: (%s) probably corrupted (%i should be %lu)\n", name, buffsize, filesize );
 		if( buffsize > filesize )
 			return false;
 	}
@@ -239,7 +249,7 @@ void Image_DXTAdjustVolume( dds_t *hdr )
 Image_LoadDDS
 =============
 */
-qboolean Image_LoadDDS( const char *name, const byte *buffer, size_t filesize )
+qboolean Image_LoadDDS( const char *name, const byte *buffer, fs_offset_t filesize )
 {
 	dds_t	header;
 	byte	*fin;
@@ -313,6 +323,9 @@ qboolean Image_LoadDDS( const char *name, const byte *buffer, size_t filesize )
 			SetBits( image.flags, IMAGE_HAS_COLOR );
 		break;
 	}
+
+	if( image.type == PF_LUMINANCE )
+		ClearBits( image.flags, IMAGE_HAS_COLOR|IMAGE_HAS_ALPHA );
 
 	if( header.dwReserved1[1] != 0 )
 	{

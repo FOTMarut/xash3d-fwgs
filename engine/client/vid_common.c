@@ -31,6 +31,10 @@ glwstate_t	glw_state;
 
 convar_t	*window_xpos;
 convar_t	*window_ypos;
+
+convar_t	*vid_rotate;
+convar_t	*vid_scale;
+
 /*
 =================
 VID_StartupGamma
@@ -62,21 +66,25 @@ void VID_InitDefaultResolution( void )
 R_SaveVideoMode
 =================
 */
-void R_SaveVideoMode( int w, int h )
+void R_SaveVideoMode( int w, int h , int render_w, int render_h )
 {
-	refState.width = w;
-	refState.height = h;
-
 	host.window_center_x = w / 2;
 	host.window_center_y = h / 2;
 
 	Cvar_SetValue( "width", w );
 	Cvar_SetValue( "height", h );
 
+	refState.width = render_w;
+	refState.height = render_h;
+
+	host.renderinfo_changed = false;
+
 	// check for 4:3 or 5:4
-	if( w * 3 != h * 4 && w * 4 != h * 5 )
+	if( render_w * 3 != render_h * 4 && render_w * 4 != render_h * 5 )
 		refState.wideScreen = true;
 	else refState.wideScreen = false;
+
+	SCR_VidInit(); // tell client.dll that vid_mode has changed
 }
 
 /*
@@ -161,37 +169,7 @@ static void VID_Mode_f( void )
 	R_ChangeDisplaySettings( w, h, Cvar_VariableInteger( "fullscreen" ) );
 }
 
-static void SetWidthAndHeightFromCommandLine()
-{
-	int width, height;
-
-	Sys_GetIntFromCmdLine( "-width", &width );
-	Sys_GetIntFromCmdLine( "-height", &height );
-
-	if( width < 1 || height < 1 )
-	{
-		// Not specified or invalid, so don't bother.
-		return;
-	}
-
-	R_SaveVideoMode( width, height );
-}
-
-static void SetFullscreenModeFromCommandLine( )
-{
-#ifndef __ANDROID__
-	if ( Sys_CheckParm("-fullscreen") )
-	{
-		Cvar_Set( "fullscreen", "1" );
-	}
-	else if ( Sys_CheckParm( "-windowed" ) )
-	{
-		Cvar_Set( "fullscreen", "0" );
-	}
-#endif
-}
-
-void VID_Init()
+void VID_Init( void )
 {
 	// system screen width and height (don't suppose for change from console at all)
 	Cvar_Get( "width", "0", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "screen width" );
@@ -205,15 +183,12 @@ void VID_Init()
 	vid_displayfrequency = Cvar_Get ( "vid_displayfrequency", "0", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "fullscreen refresh rate" );
 	vid_fullscreen = Cvar_Get( "fullscreen", "0", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "enable fullscreen mode" );
 	vid_highdpi = Cvar_Get( "vid_highdpi", "1", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "enable High-DPI mode" );
+	vid_rotate = Cvar_Get( "vid_rotate", "0", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "screen rotation (0-3)" );
+	vid_scale = Cvar_Get( "vid_scale", "1.0", FCVAR_RENDERINFO|FCVAR_VIDRESTART, "pixel scale" );
 
 	// a1ba: planned to be named vid_mode for compability
 	// but supported mode list is filled by backends, so numbers are not portable any more
 	Cmd_AddCommand( "vid_setmode", VID_Mode_f, "display video mode" );
-
-	// Set screen resolution and fullscreen mode if passed in on command line.
-	// This is done after executing opengl.cfg, as the command line values should take priority.
-	SetWidthAndHeightFromCommandLine();
-	SetFullscreenModeFromCommandLine();
 
 	R_Init(); // init renderer
 }

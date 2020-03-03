@@ -509,7 +509,6 @@ qboolean VID_ScreenShot( const char *filename, int shot_type )
 
 	// write image
 	result = gEngfuncs.FS_SaveImage( filename, r_shot );
-	// REFTODO: host.write_to_clipboard = false;		// disable write to clipboard
 	gEngfuncs.FS_AllowDirectPaths( false );			// always reset after store screenshot
 	gEngfuncs.FS_FreeImage( r_shot );
 
@@ -539,9 +538,6 @@ qboolean VID_CubemapShot( const char *base, uint size, const float *vieworg, qbo
 	if( size > gpGlobals->width || size > gpGlobals->height )
 		return false;
 
-	// setup refdef
-	RI.params |= RP_ENVVIEW;	// do not render non-bmodel entities
-
 	// alloc space
 	temp = Mem_Malloc( r_temppool, size * size * 3 );
 	buffer = Mem_Malloc( r_temppool, size * size * 3 * 6 );
@@ -550,6 +546,8 @@ qboolean VID_CubemapShot( const char *base, uint size, const float *vieworg, qbo
 
 	// use client vieworg
 	if( !vieworg ) vieworg = RI.vieworg;
+
+	R_CheckGamma();
 
 	for( i = 0; i < 6; i++ )
 	{
@@ -577,8 +575,6 @@ qboolean VID_CubemapShot( const char *base, uint size, const float *vieworg, qbo
 		if( flags ) gEngfuncs.Image_Process( &r_side, 0, 0, flags, 0.0f );
 		memcpy( buffer + (size * size * 3 * i), r_side->buffer, size * size * 3 );
 	}
-
-	RI.params &= ~RP_ENVVIEW;
 
 	r_shot->flags = IMAGE_HAS_COLOR;
 	r_shot->flags |= (skyshot) ? IMAGE_SKYBOX : IMAGE_CUBEMAP;
@@ -717,98 +713,6 @@ rebuild_page:
 	pglFinish();
 }
 
-#define POINT_SIZE		16.0f
-#define NODE_INTERVAL_X(x)	(x * 16.0f)
-#define NODE_INTERVAL_Y(x)	(x * 16.0f)
-
-void R_DrawLeafNode( float x, float y, float scale )
-{
-	float downScale = scale * 0.25f;// * POINT_SIZE;
-
-	R_DrawStretchPic( x - downScale * 0.5f, y - downScale * 0.5f, downScale, downScale, 0, 0, 1, 1, tr.particleTexture );
-}
-
-void R_DrawNodeConnection( float x, float y, float x2, float y2 )
-{
-	pglBegin( GL_LINES );
-		pglVertex2f( x, y );
-		pglVertex2f( x2, y2 );
-	pglEnd();
-}
-
-void R_ShowTree_r( mnode_t *node, float x, float y, float scale, int shownodes )
-{
-	float	downScale = scale * 0.8f;
-
-	downScale = Q_max( downScale, 1.0f );
-
-	if( !node ) return;
-
-	tr.recursion_level++;
-
-	if( node->contents < 0 )
-	{
-		mleaf_t	*leaf = (mleaf_t *)node;
-
-		if( tr.recursion_level > tr.max_recursion )
-			tr.max_recursion = tr.recursion_level;
-
-		if( shownodes == 1 )
-		{
-			if( WORLDMODEL->leafs == leaf )
-				pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
-			else if( RI.viewleaf && RI.viewleaf == leaf )
-				pglColor4f( 1.0f, 0.0f, 0.0f, 1.0f );
-			else pglColor4f( 0.0f, 1.0f, 0.0f, 1.0f );
-			R_DrawLeafNode( x, y, scale );
-		}
-		tr.recursion_level--;
-		return;
-	}
-
-	if( shownodes == 1 )
-	{
-		pglColor4f( 0.0f, 0.0f, 1.0f, 1.0f );
-		R_DrawLeafNode( x, y, scale );
-	}
-	else if( shownodes == 2 )
-	{
-		R_DrawNodeConnection( x, y, x - scale, y + scale );
-		R_DrawNodeConnection( x, y, x + scale, y + scale );
-	}
-
-	R_ShowTree_r( node->children[1], x - scale, y + scale, downScale, shownodes );
-	R_ShowTree_r( node->children[0], x + scale, y + scale, downScale, shownodes );
-
-	tr.recursion_level--;
-}
-
-void R_ShowTree( void )
-{
-	float	x = (float)((gpGlobals->width - (int)POINT_SIZE) >> 1);
-	float	y = NODE_INTERVAL_Y(1.0);
-
-	if( !WORLDMODEL || !CVAR_TO_BOOL( r_showtree ))
-		return;
-
-	tr.recursion_level = 0;
-
-	pglEnable( GL_BLEND );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-
-	pglLineWidth( 2.0f );
-	pglColor3f( 1, 0.7f, 0 );
-	pglDisable( GL_TEXTURE_2D );
-	R_ShowTree_r( WORLDMODEL->nodes, x, y, tr.max_recursion * 3.5f, 2 );
-	pglEnable( GL_TEXTURE_2D );
-	pglLineWidth( 1.0f );
-
-	R_ShowTree_r( WORLDMODEL->nodes, x, y, tr.max_recursion * 3.5f, 1 );
-
-	gEngfuncs.Con_NPrintf( 0, "max recursion %d\n", tr.max_recursion );
-}
-
 /*
 ================
 SCR_TimeRefresh_f
@@ -833,7 +737,7 @@ void SCR_TimeRefresh_f( void )
 		pglDrawBuffer( GL_FRONT );
 		for( i = 0; i < 128; i++ )
 		{
-			gpGlobals->viewangles[1] = i / 128.0 * 360.0f;
+			gpGlobals->viewangles[1] = i / 128.0f * 360.0f;
 			R_RenderScene();
 		}
 		pglFinish();
@@ -844,7 +748,7 @@ void SCR_TimeRefresh_f( void )
 		for( i = 0; i < 128; i++ )
 		{
 			R_BeginFrame( true );
-			gpGlobals->viewangles[1] = i / 128.0 * 360.0f;
+			gpGlobals->viewangles[1] = i / 128.0f * 360.0f;
 			R_RenderScene();
 			R_EndFrame();
 		}

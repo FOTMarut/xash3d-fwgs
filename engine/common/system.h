@@ -25,33 +25,14 @@ extern "C" {
 #include <setjmp.h>
 #include <stdio.h>
 #include <time.h>
-
-#ifdef XASH_SDL
-#include <SDL_messagebox.h>
-
-#define MSGBOX( x )		SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Xash Error", x, NULL )
-#define MSGBOX2( x )	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Host Error", x, host.hWnd )
-#define MSGBOX3( x )	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Host Recursive Error", x, host.hWnd )
-#elif defined(__ANDROID__) && !defined(XASH_DEDICATED)
-#define MSGBOX( x ) 	Android_MessageBox( "Xash Error", x )
-#define MSGBOX2( x )	Android_MessageBox( "Host Error", x )
-#define MSGBOX3( x )	Android_MessageBox( "Host Recursive Error", x )
-#elif defined _WIN32
-#define MSGBOX( x ) 	MessageBox( NULL, x, "Xash Error", MB_OK|MB_SETFOREGROUND|MB_ICONSTOP )
-#define MSGBOX2( x )	MessageBox( host.hWnd, x, "Host Error", MB_OK|MB_SETFOREGROUND|MB_ICONSTOP )
-#define MSGBOX3( x )	MessageBox( host.hWnd, x, "Host Recursive Error", MB_OK|MB_SETFOREGROUND|MB_ICONSTOP )
-#else
-#define BORDER1 "======================================\n"
-#define MSGBOX( x )		fprintf( stderr, BORDER1 "Xash Error: %s\n" BORDER1, x )
-#define MSGBOX2( x )	fprintf( stderr, BORDER1 "Host Error: %s\n" BORDER1, x )
-#define MSGBOX3( x )	fprintf( stderr, BORDER1 "Host Recursive Error: %s\n" BORDER1, x )
-#endif
-
 #include "xash3d_types.h"
-
 #include "const.h"
 #include "crtlib.h"
+#include "platform/platform.h"
 
+#define MSGBOX( x )	Platform_MessageBox( "Xash Error", (x), false );
+#define MSGBOX2( x )	Platform_MessageBox( "Host Error", (x), true );
+#define MSGBOX3( x )	Platform_MessageBox( "Host Recursive Error", (x), true );
 #define ASSERT( exp )	if(!( exp )) Sys_Error( "assert failed at %s:%i\n", __FILE__, __LINE__ )
 
 /*
@@ -78,17 +59,16 @@ void Sys_ParseCommandLine( int argc, char **argv );
 void Sys_MergeCommandLine( void );
 void Sys_SetupCrashHandler( void );
 void Sys_RestoreCrashHandler( void );
-void Sys_SetClipboardData( const byte *buffer, size_t size );
+void Sys_SetClipboardData( const char *buffer, size_t size );
 #define Sys_GetParmFromCmdLine( parm, out ) _Sys_GetParmFromCmdLine( parm, out, sizeof( out ))
 qboolean _Sys_GetParmFromCmdLine( const char *parm, char *out, size_t size );
 qboolean Sys_GetIntFromCmdLine( const char *parm, int *out );
-void Sys_ShellExecute( const char *path, const char *parms, int exit );
 void Sys_SendKeyEvents( void );
 void Sys_Print( const char *pMsg );
 void Sys_PrintLog( const char *pMsg );
 void Sys_InitLog( void );
 void Sys_CloseLog( void );
-void Sys_Quit( void );
+void Sys_Quit( void ) NORETURN;
 
 //
 // sys_con.c
@@ -103,10 +83,9 @@ int Sys_LogFileNo( void );
 //
 // con_win.c
 //
-#ifdef _WIN32
+#if XASH_WIN32
 void Wcon_InitConsoleCommands( void );
 void Wcon_ShowConsole( qboolean show );
-void Wcon_Init( void );
 void Wcon_CreateConsole( void );
 void Wcon_DestroyConsole( void );
 void Wcon_DisableInput( void );

@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "const.h"
 #include "client.h"
 #include "library.h"
+#include "sequence.h"
 
 static const char *file_exts[] =
 {
@@ -111,7 +112,7 @@ void COM_SetRandomSeed( int lSeed )
 		idum -= 22261048;
 }
 
-float COM_RandomFloat( float flLow, float flHigh )
+float GAME_EXPORT COM_RandomFloat( float flLow, float flHigh )
 {
 	float	fl;
 
@@ -121,7 +122,7 @@ float COM_RandomFloat( float flLow, float flHigh )
 	return (fl * (flHigh - flLow)) + flLow; // float in [low, high)
 }
 
-int COM_RandomLong( int lLow, int lHigh )
+int GAME_EXPORT COM_RandomLong( int lLow, int lHigh )
 {
 	dword	maxAcceptable;
 	dword	n, x = lHigh - lLow + 1; 	
@@ -510,8 +511,17 @@ skipwhite:
 		data++;
 		while( 1 )
 		{
-			c = (byte)*data++;
-			if( c == '\"' || !c )
+			c = (byte)*data;
+
+			// unexpected line end
+			if( !c )
+			{
+				token[len] = 0;
+				return data;
+			}
+			data++;
+
+			if( c == '\"' )
 			{
 				token[len] = 0;
 				return data;
@@ -618,7 +628,7 @@ COM_FileSize
 
 =============
 */
-int COM_FileSize( const char *filename )
+int GAME_EXPORT COM_FileSize( const char *filename )
 {
 	return FS_FileSize( filename, false );
 }
@@ -629,7 +639,7 @@ COM_AddAppDirectoryToSearchPath
 
 =============
 */
-void COM_AddAppDirectoryToSearchPath( const char *pszBaseDir, const char *appName )
+void GAME_EXPORT COM_AddAppDirectoryToSearchPath( const char *pszBaseDir, const char *appName )
 {
 	FS_AddGameHierarchy( pszBaseDir, FS_NOWRITE_PATH );
 }
@@ -642,7 +652,7 @@ Finds the file in the search path, copies over the name with the full path name.
 This doesn't search in the pak file.
 ===========
 */
-int COM_ExpandFilename( const char *fileName, char *nameOutBuffer, int nameOutBufferSize )
+int GAME_EXPORT COM_ExpandFilename( const char *fileName, char *nameOutBuffer, int nameOutBufferSize )
 {
 	const char	*path;
 	char		result[MAX_SYSPATH];
@@ -843,11 +853,11 @@ COM_LoadFileForMe
 
 =============
 */
-byte* COM_LoadFileForMe( const char *filename, int *pLength )
+byte* GAME_EXPORT COM_LoadFileForMe( const char *filename, int *pLength )
 {
 	string	name;
 	byte	*file, *pfile;
-	size_t	iLength;
+	fs_offset_t	iLength;
 
 	if( !COM_CheckString( filename ))
 	{
@@ -894,7 +904,7 @@ COM_SaveFile
 
 =============
 */
-int COM_SaveFile( const char *filename, const void *data, int len )
+int GAME_EXPORT COM_SaveFile( const char *filename, const void *data, int len )
 {
 	// check for empty filename
 	if( !COM_CheckString( filename ))
@@ -913,7 +923,7 @@ COM_FreeFile
 
 =============
 */
-void COM_FreeFile( void *buffer )
+void GAME_EXPORT COM_FreeFile( void *buffer )
 {
 	free( buffer ); 
 }
@@ -943,7 +953,7 @@ pfnGetModelType
 
 =============
 */
-int pfnGetModelType( model_t *mod )
+int GAME_EXPORT pfnGetModelType( model_t *mod )
 {
 	if( !mod ) return mod_bad;
 	return mod->type;
@@ -955,7 +965,7 @@ pfnGetModelBounds
 
 =============
 */
-void pfnGetModelBounds( model_t *mod, float *mins, float *maxs )
+void GAME_EXPORT pfnGetModelBounds( model_t *mod, float *mins, float *maxs )
 {
 	if( mod )
 	{
@@ -976,7 +986,7 @@ pfnCvar_RegisterServerVariable
 standard path to register game variable
 =============
 */
-void pfnCvar_RegisterServerVariable( cvar_t *variable )
+void GAME_EXPORT pfnCvar_RegisterServerVariable( cvar_t *variable )
 {
 	if( variable != NULL )
 		SetBits( variable->flags, FCVAR_EXTDLL );
@@ -991,7 +1001,7 @@ use with precaution: this cvar will NOT unlinked
 after game.dll is unloaded
 =============
 */
-void pfnCvar_RegisterEngineVariable( cvar_t *variable )
+void GAME_EXPORT pfnCvar_RegisterEngineVariable( cvar_t *variable )
 {
 	Cvar_RegisterVariable( (convar_t *)variable );
 }
@@ -1041,7 +1051,7 @@ pfnCVarDirectSet
 allow to set cvar directly
 =============
 */
-void pfnCVarDirectSet( cvar_t *var, const char *szValue )
+void GAME_EXPORT pfnCVarDirectSet( cvar_t *var, const char *szValue )
 {
 	Cvar_DirectSet( (convar_t *)var, szValue );
 }
@@ -1052,7 +1062,7 @@ COM_CompareFileTime
 
 =============
 */
-int COM_CompareFileTime( const char *filename1, const char *filename2, int *iCompare )
+int GAME_EXPORT COM_CompareFileTime( const char *filename1, const char *filename2, int *iCompare )
 {
 	int	bRet = 0;
 
@@ -1080,7 +1090,7 @@ COM_CheckParm
 
 =============
 */
-int COM_CheckParm( char *parm, char **ppnext )
+int GAME_EXPORT COM_CheckParm( char *parm, char **ppnext )
 {
 	int	i = Sys_CheckParm( parm );
 
@@ -1100,7 +1110,7 @@ pfnTime
 
 =============
 */
-float pfnTime( void )
+float GAME_EXPORT pfnTime( void )
 {
 	return (float)Sys_DoubleTime();
 }
@@ -1111,10 +1121,10 @@ pfnGetGameDir
 
 =============
 */
-void pfnGetGameDir( char *szGetGameDir )
+void GAME_EXPORT pfnGetGameDir( char *szGetGameDir )
 {
 	if( !szGetGameDir ) return;
-	Q_sprintf( szGetGameDir, "%s/%s", host.rootdir, GI->gamefolder );
+	Q_strcpy( szGetGameDir, GI->gamefolder );
 }
 
 qboolean COM_IsSafeFileToDownload( const char *filename )
